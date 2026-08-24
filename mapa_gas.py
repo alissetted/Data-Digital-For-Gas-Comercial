@@ -2542,7 +2542,174 @@ elif seccion == "📊  Dashboard":
                         top_fmt.style.format({'Consumo (GJ)': '{:,.0f}'}),
                         use_container_width=True,
                         hide_index=True,
+                    
                     )
+                                        # ============================================================
+                    # ANÁLISIS (KPIs + evolución + zonas)
+                    # ============================================================
+                    st.markdown("---")
+                    st.markdown("### Análisis")
+
+                    df_an = base_top.copy()
+                    df_an['Consumo_Total_Periodo_GJ'] = pd.to_numeric(
+                        df_an.get('Consumo_Total_Periodo_GJ', 0), errors='coerce'
+                    ).fillna(0)
+                    ids_an = set(df_an['id_instalacion'].dropna().unique())
+
+                    # ---- Serie mensual de volumen (histórico) ----
+                    base_mensual = consumo_diario[consumo_diario['id_instalacion'].isin(ids_an)].copy()
+                    base_mensual['AñoMes'] = base_mensual['fecha'].dt.to_period('M')
+                    serie_mensual = base_mensual.groupby('AñoMes')['consumo_gj'].sum().sort_index()
+                    clientes_por_mes = base_mensual.groupby('AñoMes')['id_instalacion'].nunique()
+
+                    meses_an = serie_mensual.index.tolist()
+                    mes_act = meses_an[-1] if meses_an else None
+                    mes_ant = meses_an[-2] if len(meses_an) > 1 else None
+
+                    def _delta_pct(actual, previo):
+                        if previo in (None, 0) or previo != previo:
+                            return None
+                        return (actual - previo) / previo * 100
+
+                    def _sub_delta(delta):
+                        if delta is None:
+                            return "Sin mes anterior"
+                        flecha = "▲" if delta >= 0 else "▼"
+                        return f"{flecha} {delta:+.1f}% vs mes anterior"
+
+                    vol_act = float(serie_mensual.get(mes_act, 0)) if mes_act is not None else 0.0
+                    vol_ant = float(serie_mensual.get(mes_ant, 0)) if mes_ant is not None else None
+                    cli_act = int(clientes_por_mes.get(mes_act, 0)) if mes_act is not None else 0
+                    cli_ant = int(clientes_por_mes.get(mes_ant, 0)) if mes_ant is not None else None
+                    vol_prom = (vol_act / cli_act) if cli_act else 0.0
+                    vol_prom_ant = (vol_ant / cli_ant) if (vol_ant and cli_ant) else None
+                    mes_act_txt = month_to_spanish_label(str(mes_act)) if mes_act is not None else "N/D"
+
+                    # Spread ponderado promedio
+                    spread_pond_prom = 0.0
+                    if {'zona_vpm', 'spread_firme', 'spread_volumetrico_o_interrumpible'}.issubset(df_an.columns):
+                        consumo_num = df_an['Consumo_Total_Periodo_GJ']
+                        zona_grupo = df_an['zona_vpm'].astype(str).str.strip()
+                        suma_zona = consumo_num.groupby(zona_grupo).transform('sum')
+                        pct = np.where(suma_zona > 0, consumo_num / suma_zona, 0.0)
+                        sf = pd.to_numeric(df_an['spread_firme'], errors='coerce').fillna(0)
+                        sv = pd.to_numeric(df_an['spread_volumetrico_o_interrumpible'], errors='coerce').fillna(0)
+                        spread_pond = np.where(sf != 0, ((sf + sv) / 2) * pct, sv * pct)
+                        spread_pond_prom = float(np.mean(spread_pond)) if len(spread_pond) else 0.0
+
+                    ka1, ka2, ka3, ka4 = st.columns(4)
+                    with ka1:
+                        render_kpi_card(
+                            "CLIENTES", f"{cli_act:,}",
+                            subtitle=_sub_delta(_delta_pct(cli_act, cli_ant)),
+                            icon="👥", accent_color="#003C88",
+                        )
+                    with ka2:
+                        render_kpi_card(
+                            "VOLUMEN TOTAL", f"{vol_act:,.0f} GJ",
+                            subtitle=f"Mes seleccionado: {mes_act_txt}",
+                            icon="⚡", accent_color="#0077CC",
+                        )
+                    with ka3:
+                        render_kpi_card(
+                            "VOLUMEN PROMEDIO", f"{vol_prom:,.1f} GJ",
+                            subtitle=_sub_delta(_delta_pct(vol_prom, vol_prom_ant)),
+                            icon="📊", accent_color="#12B886",
+                        )
+                    with ka4:
+                        render_kpi_card(
+                            "SPREAD PONDERADO PROM.", f"US$ {spread_pond_prom:,.6f}",
+                            subtitle="Promedio por participación",
+                            icon="💲", accent_color="#F59F00",
+                        )
+
+                    st.write("")
+                    st.markdown("**Evolución mensual de volumen**")
+                    if serie_mensual.empty:
+                        st.info("Sin datos mensuales para graficar.")
+                    else:
+                        x_labels = [month_to_spanish_label(str(m)) for m in serie_mensual.index]
+                        fig_evol = go.Figure(go.Scatter(
+                            x=x_labels, y=serie_mensual.values,
+                            mode='lines+markers', fill='tozeroy',
+                            line=dict(color="#0077CC", width=2),
+                            fillcolor='rgba(0, 119, 204, 0.15)',
+                            marker=dict(size=7, color="#0077CC"),
+                            hovertemplate='<b>%{x}</b><br>%{y:,.0f} GJ<extra></extra>',
+                        ))
+                        fig_evol.update_layout(
+                            height=360,
+                            margin=dict(l=10, r=10, t=10, b=10),
+                            yaxis=dict(title='Volumen (GJ)', showgrid=True, gridcolor='#EEF2F7', zeroline=False),
+                            xaxis=dict(showgrid=False),
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                        )
+                        st.plotly_chart(fig_evol, use_container_width=True,
+                                        config={"displayModeBar": False},
+                                        key=f"evol_{col}")
+
+                    st.write("")
+                    col_donut, col_barras = st.columns(2)
+
+                    with col_donut:
+                        st.markdown("**Participación de volumen por zona**")
+                        vol_zona = (
+                            df_an.groupby('zona')['Consumo_Total_Periodo_GJ'].sum()
+                            .sort_values(ascending=False)
+                        )
+                        vol_zona = vol_zona[vol_zona > 0]
+                        if vol_zona.empty:
+                            st.info("Sin volumen por zona.")
+                        else:
+                            fig_donut = go.Figure(go.Pie(
+                                labels=vol_zona.index.tolist(),
+                                values=vol_zona.values,
+                                hole=0.55,
+                                marker=dict(colors=[ZONA_COLORS.get(z, "#0077CC") for z in vol_zona.index]),
+                                textinfo='percent',
+                                hovertemplate='<b>%{label}</b><br>%{value:,.0f} GJ<br>%{percent}<extra></extra>',
+                            ))
+                            fig_donut.update_layout(
+                                height=380,
+                                margin=dict(l=10, r=10, t=10, b=10),
+                                legend=dict(orientation="v", x=1.0, y=0.5),
+                                paper_bgcolor='rgba(0,0,0,0)',
+                            )
+                            st.plotly_chart(fig_donut, use_container_width=True,
+                                            config={"displayModeBar": False},
+                                            key=f"donut_{col}")
+
+                    with col_barras:
+                        st.markdown("**Clientes por zona**")
+                        cli_zona = df_an.groupby('zona').size().sort_values(ascending=True)
+                        cli_zona = cli_zona[cli_zona > 0]
+                        if cli_zona.empty:
+                            st.info("Sin clientes por zona.")
+                        else:
+                            fig_cli = go.Figure(go.Bar(
+                                x=cli_zona.values,
+                                y=cli_zona.index.tolist(),
+                                orientation='h',
+                                marker_color="#0077CC",
+                                text=cli_zona.values,
+                                textposition='outside',
+                                textfont=dict(size=11, color='#1F2937'),
+                                hovertemplate='<b>%{y}</b><br>%{x:,} clientes<extra></extra>',
+                            ))
+                            fig_cli.update_layout(
+                                height=380,
+                                margin=dict(l=10, r=40, t=10, b=10),
+                                xaxis=dict(title='Clientes', showgrid=True, gridcolor='#EEF2F7', zeroline=False),
+                                yaxis=dict(showgrid=False, tickfont=dict(size=11)),
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                            )
+                            st.plotly_chart(fig_cli, use_container_width=True,
+                                            config={"displayModeBar": False},
+                                            key=f"barzona_{col}")
+
+                    st.markdown("---")
 
                     # ----- Tendencia diaria de consumo (detalle día a día) -----
                     ids_grupo = base_top['id_instalacion'].dropna().unique().tolist()
