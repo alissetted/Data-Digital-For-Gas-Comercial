@@ -1392,6 +1392,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                         location=[row[idx_lat], row[idx_lon]],
                         radius=radio,
                         color=col,
+                       
                         fill=True,
                         fill_color=col,
                         fill_opacity=0.7,
@@ -1564,7 +1565,7 @@ with st.sidebar:
     st.markdown('<div class="engie-section">Navegación</div>', unsafe_allow_html=True)
     seccion = st.radio(
         "Menú",
-        ["🗺️  Mapa", "📄  Reportes", "🏆  Top 10", "📊  Cartera"],
+        ["🗺️  Mapa", "📄  Reportes", "📊  Dashboard", "👛  Cartera"],
         label_visibility="collapsed",
     )
 
@@ -1655,7 +1656,7 @@ if "pending_zona" in st.session_state:
 # df_geo cacheado: solo se recalcula cuando cambian el status o el rango de fechas,
 # y se construye solo en secciones que realmente lo usan.
 df_geo = pd.DataFrame()
-secciones_con_geo = {"🗺️  Mapa", "📄  Reportes", "🏆  Top 10"}
+secciones_con_geo = {"🗺️  Mapa", "📄  Reportes", "📊  Dashboard"}
 if seccion in secciones_con_geo and cols_consumo and selected_status_gas:
     with st.spinner("Geocodificando..."):
         df_geo = _df_geo_con_consumo(
@@ -1842,11 +1843,11 @@ if seccion == "🗺️  Mapa":
                         df_cp[col_sel] = pd.to_numeric(df_cp[col_sel], errors='coerce').fillna(0)
                         df_cp = df_cp.rename(columns={
                             'id_instalacion': 'Instalación', 'bp': 'Cliente',
-                            'zona': 'Zona', col_sel: f'Consumo GJ',
+                            'zona': 'Zona', col_sel: 'Consumo (GJ)'
                         })
                         with col_cp_table:
                             st.dataframe(
-                                df_cp.sort_values('Consumo GJ', ascending=False),
+                                df_cp.sort_values('Consumo (GJ)', ascending=False),
                                 use_container_width=True,
                                 hide_index=True,
                                 height=min(180, 40 + 35 * len(df_cp)),
@@ -2243,7 +2244,7 @@ elif seccion == "📄  Reportes":
                         'spread_ponderado': 'sum',
                     })
                     .rename(columns={'zona_vpm': 'Zona'})
-                    .sort_values('Consumo_Total_Periodo_GJ', ascending=False)
+                    .sort_values('Consumo', ascending=False)
                 )
 
                 total_consumo_zonas = float(resumen_zona['Consumo_Total_Periodo_GJ'].sum())
@@ -2366,7 +2367,7 @@ elif seccion == "📄  Reportes":
 # ============================================================
 # SECCIÓN: TOP 10
 # ============================================================
-elif seccion == "🏆  Top 10":
+elif seccion == "📊  Dashboard":
     st.subheader("Top 10 consumidores por periodo")
 
     filtro_top10 = st.text_input("Filtrar por Id de Instalación", key="filtro_instalacion_top10")
@@ -2377,6 +2378,28 @@ elif seccion == "🏆  Top 10":
         ]
 
     if cols_consumo and not df_geo_top10.empty:
+        # ---- Filtro de zona estilo tarjeta ENGIE ----
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stSelectbox"][id*="zona_top"] label {
+                font-size: 0.72rem;
+                font-weight: 700;
+                letter-spacing: 0.6px;
+                text-transform: uppercase;
+                color: #003C88;
+            }
+            div[data-testid="stSelectbox"][id*="zona_top"] div[data-baseweb="select"] > div {
+                border-radius: 14px !important;
+                border: 1.5px solid #D7E4F3 !important;
+                background: #FFFFFF;
+                box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+                font-weight: 600;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
         zona_top = st.selectbox(
             "Filtrar Top 10 por zona",
             ["Todas"] + list(ZONAS.keys()),
@@ -2388,6 +2411,13 @@ elif seccion == "🏆  Top 10":
         subtabs = st.tabs([nombre_consumo(c) for c in cols_consumo])
 
         zona_txt = f"en {zona_top}" if zona_top != "Todas" else "a nivel nacional"
+
+        # Paleta ENGIE de 10 colores (del más oscuro al más claro)
+        ENGIE_TOP10_COLORS = [
+            "#002B49", "#003C88", "#005C9A", "#0077CC",
+            "#278CBC", "#7FA8D8", "#A8C8EE", "#BDD9F5",
+            "#CDE7FF", "#DFF0FF",
+        ]
 
         for subtab, col in zip(subtabs, cols_consumo):
             with subtab:
@@ -2410,7 +2440,6 @@ elif seccion == "🏆  Top 10":
                     concentracion = (top10_sum / total_periodo) if total_periodo else 0
                     lider = top.iloc[0]
 
-                    # --- Comparación con el mes inmediatamente anterior (si existe) ---
                     col_prev = col_periodo_anterior(col, base_top.columns)
                     rank_prev_map = {}
                     if col_prev:
@@ -2428,12 +2457,6 @@ elif seccion == "🏆  Top 10":
                         if rank_prev_map else 0
                     )
 
-                    # ----- Titular narrativo -----
-                    st.markdown(
-                        f"#### 🥇 **{lider['razon_social']}** lidera {zona_txt} con "
-                        f"**{lider[col]:,.0f} GJ** — el Top 10 concentra **{concentracion:.0%}** "
-                        "del consumo del periodo"
-                    )
                     if rank_prev_map and nuevos_en_top:
                         st.caption(
                             f"🆕 {nuevos_en_top} cliente(s) nuevo(s) en el Top 10 respecto al mes anterior "
@@ -2442,31 +2465,23 @@ elif seccion == "🏆  Top 10":
                     elif not rank_prev_map:
                         st.caption("No hay un mes anterior disponible para comparar tendencia.")
 
-                    # ----- KPIs de contexto -----
                     k1, k2, k3 = st.columns(3)
                     with k1:
                         render_mini_alert_card(
-                            "LÍDER DEL PERIODO",
-                            f"{lider[col]:,.0f} GJ",
-                            subtitle=lider['razon_social'],
-                            icon="🥇",
-                            color="#0077CC",
+                            "LÍDER DEL PERIODO", f"{lider[col]:,.0f} GJ",
+                            subtitle=lider['razon_social'], icon="🥇", color="#0077CC",
                         )
                     with k2:
                         render_mini_alert_card(
-                            "CONCENTRACIÓN TOP 10",
-                            f"{concentracion:.0%}",
-                            subtitle=f"de {total_periodo:,.0f} GJ totales",
-                            icon="🎯",
-                            color="#12B886",
+                            "CONCENTRACIÓN TOP 10", f"{concentracion:.0%}",
+                            subtitle=f"de {total_periodo:,.0f} GJ totales", icon="🎯", color="#12B886",
                         )
                     with k3:
                         render_mini_alert_card(
                             "NUEVOS EN EL TOP 10",
                             f"{nuevos_en_top}" if rank_prev_map else "N/D",
                             subtitle="vs. mes anterior" if rank_prev_map else "Sin mes anterior disponible",
-                            icon="🆕",
-                            color="#F59F00",
+                            icon="🆕", color="#F59F00",
                         )
 
                     st.write("")
@@ -2477,7 +2492,6 @@ elif seccion == "🏆  Top 10":
                         col: 'Consumo (GJ)'
                     })
 
-                    # ----- Tendencia de ranking vs. mes anterior -----
                     if rank_prev_map:
                         def _tendencia(row):
                             rank_ant = rank_prev_map.get(row['Razón social'])
@@ -2491,11 +2505,39 @@ elif seccion == "🏆  Top 10":
                             return "➖ Igual"
                         top_fmt['Tendencia'] = top_fmt.apply(_tendencia, axis=1)
 
-                    st.bar_chart(
-                        top_fmt.set_index('Razón social')['Consumo (GJ)'],
-                        color="#007BC5",
-                        horizontal=True
+                    # ---- Gráfico de barras horizontal, mayor a menor, paleta ENGIE ----
+                    top_chart = top_fmt.sort_values('Consumo (GJ)', ascending=True)  # ascending=True para que el mayor quede arriba en horizontal
+                    n_bars = len(top_chart)
+                    bar_colors = ENGIE_TOP10_COLORS[:n_bars][::-1]  # más oscuro para el mayor
+
+                    fig_top10 = go.Figure(go.Bar(
+                        x=top_chart['Consumo (GJ)'],
+                        y=top_chart['Razón social'],
+                        orientation='h',
+                        marker=dict(
+                            color=bar_colors,
+                            line=dict(color='rgba(0,0,0,0)', width=0),
+                        ),
+                        text=top_chart['Consumo (GJ)'].apply(lambda v: f"{v:,.0f}"),
+                        textposition='outside',
+                        textfont=dict(size=11, color='#1F2937'),
+                        hovertemplate='<b>%{y}</b><br>Consumo: %{x:,.0f} GJ<extra></extra>',
+                    ))
+                    fig_top10.update_layout(
+                        height=max(300, 44 * n_bars),
+                        margin=dict(l=10, r=60, t=10, b=10),
+                        xaxis=dict(
+                            title='Consumo (GJ)',
+                            showgrid=True,
+                            gridcolor='#EEF2F7',
+                            zeroline=False,
+                        ),
+                        yaxis=dict(showgrid=False, tickfont=dict(size=11)),
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
                     )
+                    st.plotly_chart(fig_top10, use_container_width=True, config={"displayModeBar": False})
+
                     st.dataframe(
                         top_fmt.style.format({'Consumo (GJ)': '{:,.0f}'}),
                         use_container_width=True,
@@ -2539,9 +2581,8 @@ elif seccion == "🏆  Top 10":
                             .sort_index()
                         )
                         st.caption(f"Consumo diario total {zona_txt} — {nombre_consumo(col)}")
-                        st.line_chart(tendencia_total, color="#0077CC")
+                        st.line_chart(tendencia_total, color="#007BC5")
 
-                        # Tendencia diaria de los clientes líderes (top 5), para comparar entre ellos.
                         top_ids = (
                             base_top[base_top['razon_social'].isin(top['razon_social'].head(5))]
                             [['id_instalacion', 'razon_social']]
@@ -2557,6 +2598,7 @@ elif seccion == "🏆  Top 10":
                             )
                             st.caption("Tendencia diaria de los 5 clientes líderes del periodo")
                             st.line_chart(tendencia_clientes)
+
     elif cols_consumo and df_geo.empty:
         st.info("No hay coordenadas para calcular el Top 10 por zona.")
     elif cols_consumo:
@@ -2568,7 +2610,7 @@ elif seccion == "🏆  Top 10":
 # ============================================================
 # SECCIÓN: CARTERA
 # ============================================================
-elif seccion == "📊  Cartera":
+elif seccion == "👛  Cartera":
     st.subheader("Salud de cartera y ciclo de vida de clientes")
     st.caption(
         "Esta sección siempre incluye todos los status (Activo, Inactivo, Cancelado, Pre Activo), "
@@ -2876,7 +2918,7 @@ elif seccion == "📊  Cartera":
             with a3:
                 render_mini_alert_card(
                     title="ZONA MÁS AFECTADA",
-                    value=zona_top,
+                    value= zona_top,
                     subtitle=f"{zona_top_n:,} cliente(s) en riesgo",
                     icon="📍",
                     color="#0077CC",
