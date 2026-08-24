@@ -1450,7 +1450,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                 """
                 callback = (callback.replace('MAXC', str(max_c))
                             .replace('L1', str(l1)).replace('L2', str(l2))
-                            .replace('L3', str(l3)).replace('L4', str(l4)))
+                            .replace('L3', str(l3)).replace('L4', str(c4)))  # corregido: era str(c4)
 
                 icon_create = """
                 function(cluster) {
@@ -1702,6 +1702,9 @@ with st.sidebar:
 min_gj_global = int(st.session_state.get("min_gj_global", 0)) if max_gj_global > 0 else 0
 if max_gj_global > 0:
     min_gj_global = max(0, min(min_gj_global, max_gj_global))
+
+# Guardar df_geo sin el filtro de GJ para los gráficos de distribución por zona
+df_geo_todas_zonas = df_geo.copy()
 
 if min_gj_global > 0 and not df_geo.empty:
     df_geo = df_geo[
@@ -2244,7 +2247,7 @@ elif seccion == "📄  Reportes":
                         'spread_ponderado': 'sum',
                     })
                     .rename(columns={'zona_vpm': 'Zona'})
-                    .sort_values('Consumo', ascending=False)
+                    .sort_values('Consumo_Total_Periodo_GJ', ascending=False)  # corregido: era 'Consumo'
                 )
 
                 total_consumo_zonas = float(resumen_zona['Consumo_Total_Periodo_GJ'].sum())
@@ -2597,33 +2600,28 @@ elif seccion == "📊  Dashboard":
                         spread_pond = np.where(sf != 0, ((sf + sv) / 2) * pct, sv * pct)
                         spread_pond_prom = float(np.mean(spread_pond)) if len(spread_pond) else 0.0
 
-                    ka1, ka2, ka3, ka4 = st.columns(4)
-                    with ka1:
-                        render_kpi_card(
+                    k1, k2, k3 = st.columns(3)
+                    with k1:
+                        render_mini_alert_card(
                             "CLIENTES", f"{cli_act:,}",
                             subtitle=_sub_delta(_delta_pct(cli_act, cli_ant)),
-                            icon="👥", accent_color="#003C88",
+                            icon="👥", color="#12B886",
                         )
-                    with ka2:
-                        render_kpi_card(
+                    with k2:
+                        render_mini_alert_card(
                             "VOLUMEN TOTAL", f"{vol_act:,.0f} GJ",
                             subtitle=f"Mes seleccionado: {mes_act_txt}",
-                            icon="⚡", accent_color="#0077CC",
+                            icon="⚡", color="#0077CC",
                         )
-                    with ka3:
-                        render_kpi_card(
+                    with k3:
+                        render_mini_alert_card(
                             "VOLUMEN PROMEDIO", f"{vol_prom:,.1f} GJ",
                             subtitle=_sub_delta(_delta_pct(vol_prom, vol_prom_ant)),
-                            icon="📊", accent_color="#12B886",
-                        )
-                    with ka4:
-                        render_kpi_card(
-                            "SPREAD PONDERADO PROM.", f"US$ {spread_pond_prom:,.6f}",
-                            subtitle="Promedio por participación",
-                            icon="💲", accent_color="#F59F00",
+                            icon="📊", color="#F59F00",
                         )
 
                     st.write("")
+
                     st.markdown("**Evolución mensual de volumen**")
                     if serie_mensual.empty:
                         st.info("Sin datos mensuales para graficar.")
@@ -2632,9 +2630,9 @@ elif seccion == "📊  Dashboard":
                         fig_evol = go.Figure(go.Scatter(
                             x=x_labels, y=serie_mensual.values,
                             mode='lines+markers', fill='tozeroy',
-                            line=dict(color="#0077CC", width=2),
+                            line=dict(color="#007BC5", width=2),
                             fillcolor='rgba(0, 119, 204, 0.15)',
-                            marker=dict(size=7, color="#0077CC"),
+                            marker=dict(size=7, color="#007BC5"),
                             hovertemplate='<b>%{x}</b><br>%{y:,.0f} GJ<extra></extra>',
                         ))
                         fig_evol.update_layout(
@@ -2655,7 +2653,8 @@ elif seccion == "📊  Dashboard":
                     with col_donut:
                         st.markdown("**Participación de volumen por zona**")
                         vol_zona = (
-                            df_an.groupby('zona')['Consumo_Total_Periodo_GJ'].sum()
+                            df_geo_todas_zonas.groupby('zona')['Consumo_Total_Periodo_GJ']
+                            .apply(lambda s: pd.to_numeric(s, errors='coerce').fillna(0).sum())
                             .sort_values(ascending=False)
                         )
                         vol_zona = vol_zona[vol_zona > 0]
@@ -2682,7 +2681,12 @@ elif seccion == "📊  Dashboard":
 
                     with col_barras:
                         st.markdown("**Clientes por zona**")
-                        cli_zona = df_an.groupby('zona').size().sort_values(ascending=True)
+                        mes_col = col if col in df_geo_todas_zonas.columns else 'Consumo_Total_Periodo_GJ'
+                        cli_zona = (
+                            df_geo_todas_zonas[pd.to_numeric(df_geo_todas_zonas[mes_col], errors='coerce').fillna(0) > 0]
+                            .groupby('zona').size()
+                            .sort_values(ascending=True)
+                        )
                         cli_zona = cli_zona[cli_zona > 0]
                         if cli_zona.empty:
                             st.info("Sin clientes por zona.")
@@ -2691,7 +2695,7 @@ elif seccion == "📊  Dashboard":
                                 x=cli_zona.values,
                                 y=cli_zona.index.tolist(),
                                 orientation='h',
-                                marker_color="#0077CC",
+                                marker_color="#007BC5",
                                 text=cli_zona.values,
                                 textposition='outside',
                                 textfont=dict(size=11, color='#1F2937'),
@@ -2817,49 +2821,30 @@ elif seccion == "👛  Cartera":
         def _pct(n):
             return f"{n / total_ciclo:.1%} de la cartera" if total_ciclo else None
 
-        kc1, kc2, kc3, kc4, kc5 = st.columns(5)
-        with kc1:
-            render_kpi_card(
-                title="ACTIVOS",
+        k1, k2, k3 = st.columns(3)
+        with k1:
+            render_mini_alert_card(
+                "ACTIVOS",
                 value=f"{activos_n:,}",
                 subtitle=_pct(activos_n) or "Sin datos",
                 icon="🟢",
-                accent_color="#12B886",
+                color="#12B886",
             )
-        with kc2:
-            render_kpi_card(
-                title="INACTIVOS",
+        with k2:
+            render_mini_alert_card(
+                "INACTIVOS",
                 value=f"{inactivos_n:,}",
                 subtitle=_pct(inactivos_n) or "Sin datos",
                 icon="⚪",
-                accent_color="#6B7280",
+                color="#6B7280",
             )
-        with kc3:
-            render_kpi_card(
-                title="CANCELADOS",
+        with k3:
+            render_mini_alert_card(
+                "CANCELADOS",
                 value=f"{cancelados_n:,}",
                 subtitle=_pct(cancelados_n) or "Sin datos",
                 icon="🔴",
-                accent_color="#E03131",
-            )
-        with kc4:
-            render_kpi_card(
-                title="PRE ACTIVO",
-                value=f"{preactivos_n:,}",
-                subtitle=_pct(preactivos_n) or "Sin datos",
-                icon="🟠",
-                accent_color="#F59F00",
-            )
-        with kc5:
-            subtitle_sin_status = _pct(sin_status_n) if total_ciclo else "Sin datos"
-            if sin_status_n:
-                subtitle_sin_status = f"{subtitle_sin_status} · Revisar origen"
-            render_kpi_card(
-                title="SIN STATUS",
-                value=f"{sin_status_n:,}",
-                subtitle=subtitle_sin_status,
-                icon="🔹",
-                accent_color="#66C2FF",
+                color="#E03131",
             )
 
         st.write("")
@@ -2909,8 +2894,13 @@ elif seccion == "👛  Cartera":
             .groupby("AñoMes").size().rename("Bajas")
         )
 
+
+
+
+
         timeline = pd.concat([altas_serie, bajas_serie], axis=1).fillna(0).sort_index().reset_index()
         timeline = timeline.rename(columns={"index": "AñoMes"})
+       
         timeline["Altas"] = timeline["Altas"].astype(int)
         timeline["Bajas"] = timeline["Bajas"].astype(int)
         timeline["Neto"] = timeline["Altas"] - timeline["Bajas"]
@@ -2982,17 +2972,11 @@ elif seccion == "👛  Cartera":
                     else:
                         st.dataframe(
                             bajas_mes_historico[["razon_social", "zona", "fecha_baja_efectiva"]]
-                            .rename(columns={
-                                "razon_social": "Cliente",
-                                "zona": "Zona",
-                                "fecha_baja_efectiva": "Fecha",
-                            })
+                            .rename(columns={"razon_social": "Cliente", "zona": "Zona", "fecha_baja_efectiva": "Fecha"})
                             .sort_values("Fecha"),
                             use_container_width=True,
                             hide_index=True,
-                            column_config={
-                                "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
-                            },
+                            column_config={"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY")},
                         )
             with col_altas_det:
                 with st.expander(f"Clientes dados de alta · {month_to_spanish_label(mes_historico)} ({len(altas_mes_historico)})"):
@@ -3001,17 +2985,11 @@ elif seccion == "👛  Cartera":
                     else:
                         st.dataframe(
                             altas_mes_historico[["razon_social", "zona", "fecha_pes_efectiva"]]
-                            .rename(columns={
-                                "razon_social": "Cliente",
-                                "zona": "Zona",
-                                "fecha_pes_efectiva": "Fecha",
-                            })
+                            .rename(columns={"razon_social": "Cliente", "zona": "Zona", "fecha_pes_efectiva": "Fecha"})
                             .sort_values("Fecha"),
                             use_container_width=True,
                             hide_index=True,
-                            column_config={
-                                "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
-                            },
+                            column_config={"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY")},
                         )
 
         bajas_pendientes = int((~ciclo_df["baja_valida"] & ciclo_df["status_norm"].isin(["Inactivo", "Cancelado"])).sum())
@@ -3029,13 +3007,8 @@ elif seccion == "👛  Cartera":
         hoy = pd.Timestamp(datetime.now().date())
         activos_df["dias_restantes"] = (activos_df["vigencia"] - hoy).dt.days
 
-        # Solo alertar cuando la renovación NO es automática
         es_no_automatica = (
-            activos_df["renovacion"]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .eq("no automática")
+            activos_df["renovacion"].astype(str).str.strip().str.lower().eq("no automática")
         )
 
         alertas = activos_df[
@@ -3065,30 +3038,21 @@ elif seccion == "👛  Cartera":
                     zona_top = str(zona_counts.index[0])
                     zona_top_n = int(zona_counts.iloc[0])
 
-            a1, a2, a3 = st.columns(3)
-            with a1:
+            k1, k2, k3 = st.columns(3)
+            with k1:
                 render_mini_alert_card(
-                    title="CLIENTES POR VENCER",
-                    value=f"{len(alertas):,}",
-                    subtitle=f"En los próximos {dias_alerta} días",
-                    icon="⚠️",
-                    color="#F59F00",
+                    title="CLIENTES POR VENCER", value=f"{len(alertas):,}",
+                    subtitle=f"En los próximos {dias_alerta} días", icon="⚠️", color="#F59F00",
                 )
-            with a2:
+            with k2:
                 render_mini_alert_card(
-                    title="MÁS PRÓXIMO A VENCER",
-                    value=f"{dias_minimos:,}",
-                    subtitle="Días restantes",
-                    icon="⏳",
-                    color=color_proximo,
+                    title="MÁS PRÓXIMO A VENCER", value=f"{dias_minimos:,}",
+                    subtitle="Días restantes", icon="⏳", color=color_proximo,
                 )
-            with a3:
+            with k3:
                 render_mini_alert_card(
-                    title="ZONA MÁS AFECTADA",
-                    value= zona_top,
-                    subtitle=f"{zona_top_n:,} cliente(s) en riesgo",
-                    icon="📍",
-                    color="#0077CC",
+                    title="ZONA MÁS AFECTADA", value=zona_top,
+                    subtitle=f"{zona_top_n:,} cliente(s) en riesgo", icon="📍", color="#0077CC",
                 )
 
             st.write("")
@@ -3112,11 +3076,8 @@ elif seccion == "👛  Cartera":
 
             st.dataframe(
                 alertas_det.rename(columns={
-                    "razon_social": "Cliente",
-                    "zona": "Zona",
-                    "vigencia": "Vigencia",
-                    "dias_restantes": "Días restantes",
-                    "renovacion": "Renovación",
+                    "razon_social": "Cliente", "zona": "Zona", "vigencia": "Vigencia",
+                    "dias_restantes": "Días restantes", "renovacion": "Renovación",
                     "riesgo_vencimiento": "Riesgo de vencimiento",
                 }),
                 use_container_width=True,
