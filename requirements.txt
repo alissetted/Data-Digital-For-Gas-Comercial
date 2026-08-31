@@ -1,0 +1,15 @@
+streamlit==1.59.2
+streamlit-folium==0.27.2
+streamlit-sortables==0.3.1
+pandas==3.0.3
+numpy==2.5.1
+pyodbc==5.3.0
+pgeocode==0.5.0
+folium==0.20.0
+branca==0.8.2
+shapely==2.0.4
+plotly==6.9.0
+pillow==12.3.0
+openpyxl==3.1.5
+xlsxwriter==3.2.9
+fpdf2==2.8.7
