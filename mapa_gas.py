@@ -936,17 +936,49 @@ def _dibujar_kml(parent, datos_kml, carpetas_visibles):
 # --- Conexión a la base de datos (pyodbc) ---
 @st.cache_resource
 def get_connection():
+    if "denodo" not in st.secrets:
+        raise RuntimeError(
+            "No se encontró la configuración `denodo` en Streamlit Secrets. "
+            "Configura tus credenciales en Settings > Secrets de Streamlit Cloud."
+        )
+
     cfg = st.secrets["denodo"]
-    conn_str = (
-        f"DSN={cfg['DSN']};"
-        f"SERVER={cfg['SERVER']};"
-        f"DATABASE={cfg['DATABASE']};"
-        f"UID={cfg['UID']};"
-        f"PWD={cfg['PWD']};"
-        "trusted_connection=yes;"
-        "TrustServerCertificate=Yes"
-    )
-    return pyodbc.connect(conn_str)
+    conn_str = cfg.get("CONNECTION_STRING", "").strip()
+
+    if not conn_str:
+        required = ["SERVER", "DATABASE", "UID", "PWD"]
+        missing = [key for key in required if not str(cfg.get(key, "")).strip()]
+        if missing:
+            raise RuntimeError(
+                "Faltan claves en `denodo`: "
+                + ", ".join(missing)
+                + ". Define `CONNECTION_STRING` o completa las claves requeridas."
+            )
+
+        dsn = str(cfg.get("DSN", "")).strip()
+        if dsn:
+            conn_str = (
+                f"DSN={dsn};"
+                f"SERVER={cfg['SERVER']};"
+                f"DATABASE={cfg['DATABASE']};"
+                f"UID={cfg['UID']};"
+                f"PWD={cfg['PWD']};"
+                "TrustServerCertificate=Yes"
+            )
+        else:
+            driver = str(cfg.get("DRIVER", "ODBC Driver 18 for SQL Server")).strip()
+            conn_str = (
+                f"DRIVER={{{driver}}};"
+                f"SERVER={cfg['SERVER']};"
+                f"DATABASE={cfg['DATABASE']};"
+                f"UID={cfg['UID']};"
+                f"PWD={cfg['PWD']};"
+                "Encrypt=Yes;"
+                "TrustServerCertificate=Yes"
+            )
+
+    timeout = int(cfg.get("TIMEOUT", 30))
+    return pyodbc.connect(conn_str, timeout=timeout)
 
 
 # --- Carga de datos con caché ---
@@ -1571,7 +1603,12 @@ with st.sidebar:
 
 # ===== CARGA Y FILTRADO (común a todas las secciones) =====
 with st.spinner("Consultando la base de datos..."):
-    resultado, consumo_diario = cargar_datos()
+    try:
+        resultado, consumo_diario = cargar_datos()
+    except Exception as exc:
+        st.error("No se pudo conectar/cargar datos desde Denodo.")
+        st.exception(exc)
+        st.stop()
 resultado_todos_status = resultado.copy()
 
 # --- Filtro de status (aplicado antes de todo el análisis) ---
