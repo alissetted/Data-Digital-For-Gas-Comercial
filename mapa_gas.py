@@ -6,6 +6,10 @@ import numpy as np
 import pyodbc
 import pgeocode
 import folium
+import time
+import os
+import base64
+from PIL import Image
 from folium.plugins import FastMarkerCluster
 from folium import MacroElement
 from branca.element import Template
@@ -16,7 +20,6 @@ from io import BytesIO
 import xml.etree.ElementTree as ET
 import unicodedata
 import re
-from pathlib import Path
 from datetime import date, datetime
 import plotly.graph_objects as go
 from fpdf import FPDF
@@ -161,6 +164,47 @@ st.markdown("""
         color: #1F2937 !important;
         fill: #1F2937 !important;
     }
+    /* Filtro de zona: variante compacta (más limpia que el menú principal). */
+    section[data-testid="stSidebar"] .st-key-zona_widget div[role="radiogroup"] {
+        display: grid;
+        gap: 6px;
+    }
+    section[data-testid="stSidebar"] .st-key-zona_widget div[role="radiogroup"] label {
+        display: flex;
+        align-items: center;
+        padding: 7px 10px;
+        margin: 0;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+        font-weight: 600;
+        font-size: 0.92rem;
+        border: 1.5px solid #D7E4F3;
+        background: #FFFFFF;
+        box-shadow: none;
+    }
+    section[data-testid="stSidebar"] .st-key-zona_widget div[role="radiogroup"] label:hover {
+        background: #F3F8FF;
+        border-color: #BFD7F1;
+    }
+    section[data-testid="stSidebar"] .st-key-zona_widget div[role="radiogroup"] label > div:first-child {
+        display: none;
+    }
+    section[data-testid="stSidebar"] .st-key-zona_widget div[role="radiogroup"] label:has(input:checked) {
+        background: linear-gradient(135deg, #0077CC 0%, #003C88 100%);
+        border-color: #0077CC;
+        box-shadow: 0 0 0 2px rgba(0, 119, 204, 0.15);
+    }
+    section[data-testid="stSidebar"] .st-key-zona_widget div[role="radiogroup"] label,
+    section[data-testid="stSidebar"] .st-key-zona_widget div[role="radiogroup"] label * {
+        color: #1F2937 !important;
+        fill: #1F2937 !important;
+    }
+    section[data-testid="stSidebar"] .st-key-zona_widget div[role="radiogroup"] label:has(input:checked),
+    section[data-testid="stSidebar"] .st-key-zona_widget div[role="radiogroup"] label:has(input:checked) * {
+        color: #FFFFFF !important;
+        fill: #FFFFFF !important;
+    }
     /* Number input (ej. "GJ mínimo (exacto)"): el texto hereda color blanco
        del sidebar y queda invisible sobre el fondo blanco del campo. */
     section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input {
@@ -207,6 +251,51 @@ st.markdown("""
     }
     div[role="option"]:hover {
         background: #E5F1FF !important;
+    }
+    /* Selector Clientes/Garantías como botón de acción */
+    div[data-testid="stSegmentedControl"] {
+        min-height: 62px;
+        width: 100% !important;
+        max-width: 360px !important;
+        margin-left: auto !important;
+        margin-right: 0 !important;
+    }
+    div[data-testid="stSegmentedControl"] > div,
+    div[data-testid="stSegmentedControl"] div[role="tablist"],
+    div[data-testid="stSegmentedControl"] button {
+        width: 100% !important;
+        gap: 10px !important;
+    }
+    div[data-testid="stSegmentedControl"] > div {
+        padding: 5px !important;
+        border-radius: 18px !important;
+        background: linear-gradient(180deg, #EAF5FF 0%, #DCEEFF 100%) !important;
+        border: 1px solid #BFD7F1 !important;
+        box-shadow: 0 8px 18px rgba(0, 119, 204, 0.10);
+    }
+    div[data-testid="stSegmentedControl"] div[role="option"],
+    div[data-testid="stSegmentedControl"] button {
+        font-size: 1.16rem !important;
+        font-weight: 800 !important;
+        padding: 1rem 1.9rem !important;
+        min-height: 54px !important;
+        border-radius: 12px !important;
+        letter-spacing: 0.2px;
+        color: #003C88 !important;
+        background: transparent !important;
+        border: 1px solid transparent !important;
+    }
+    div[data-testid="stSegmentedControl"] div[role="option"][aria-selected="true"],
+    div[data-testid="stSegmentedControl"] button[aria-pressed="true"] {
+        background: linear-gradient(135deg, #0077CC 0%, #003C88 100%) !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 8px 18px rgba(0, 60, 136, 0.22) !important;
+        border-color: rgba(255,255,255,0.25) !important;
+    }
+    div[data-testid="stSegmentedControl"] div[role="option"]:hover,
+    div[data-testid="stSegmentedControl"] button:hover {
+        transform: translateY(-1px);
+        transition: all 0.15s ease;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -455,6 +544,17 @@ COLS_CLIENTES = [
     'spread_volumetrico_o_interrumpible', 'spread_firme',
 ]
 
+# Columnas de la tabla de garantías que se leen de la base de datos (pestaña Garantías).
+COLS_GARANTIA = [
+    'id_bp', 'id_instalacion', 'cuenta_contrato', 'razon_social', 'ldc',
+    'renovacion', 'whitelist', 'id_solicitud_garantia', 'fecha_historico',
+    'exento', 'monto_solicitado', 'moneda_monto_solicitado', 'id_garantia',
+    'numero_documento', 'existencia_fisica', 'fecha_emision', 'fecha_vigencia',
+    'fecha_devolucion', 'status_garantia', 'tipo_garantia', 'id_efectivo_sap',
+    'emisor_garantia', 'monto_garantia', 'moneda_garantia', 'garantia_aplicada',
+    'monto_aplicado_garantia', 'moneda_aplicada_garantia',
+]
+
 # Nombres amigables para columnas mostradas en el generador de reportes.
 RENOMBRES_REPORTE = {
     'id_instalacion': 'Instalación',
@@ -517,6 +617,10 @@ def _dialog_manage_columns(columnas_disponibles, columnas_default):
         c for c in st.session_state.get("gestion_columnas_draft", columnas_default)
         if c in columnas_disponibles
     ]
+    columnas_disponibles_ordenadas = sorted(
+        columnas_disponibles,
+        key=lambda c: RENOMBRES_REPORTE.get(c, c).casefold(),
+    )
 
     col_izq, col_der = st.columns(2)
 
@@ -528,7 +632,7 @@ def _dialog_manage_columns(columnas_disponibles, columnas_default):
         )
         filtro_txt = busqueda.strip().lower()
         with st.container(height=320):
-            for c in columnas_disponibles:
+            for c in columnas_disponibles_ordenadas:
                 etiqueta = RENOMBRES_REPORTE.get(c, c)
                 if filtro_txt and filtro_txt not in etiqueta.lower():
                     continue
@@ -558,43 +662,61 @@ def _dialog_manage_columns(columnas_disponibles, columnas_default):
     st.divider()
     b_reset, b_cancel, b_save = st.columns(3)
     with b_reset:
-        if st.button("Reset to default", width='stretch', key="gestion_cols_reset"):
-            for c in columnas_disponibles:
+        if st.button("Reset to default", use_container_width=True, key="gestion_cols_reset"):
+            for c in columnas_disponibles_ordenadas:
                 st.session_state.pop(f"gestion_col_chk_{c}", None)
             st.session_state["gestion_columnas_draft"] = list(columnas_default)
             st.rerun()
     with b_cancel:
-        if st.button("Cancel", width='stretch', key="gestion_cols_cancel"):
+        if st.button("Cancel", use_container_width=True, key="gestion_cols_cancel"):
             st.session_state["mostrar_manage_columns"] = False
             st.rerun()
     with b_save:
-        if st.button("Save", type="primary", width='stretch', key="gestion_cols_save"):
+        if st.button("Save", type="primary", use_container_width=True, key="gestion_cols_save"):
             st.session_state["reporte_columnas_orden"] = list(draft)
             st.session_state["mostrar_manage_columns"] = False
             st.rerun()
 
 
 # --- Normalización de status ---
+_STATUS_MAPA = {
+    "activo": "Activo",
+    "inactivo": "Inactivo",
+    "cancelado": "Cancelado",
+    "pre activo": "Pre Activo",
+}
+
+# Normalización de status_garantia (pestaña Garantías). A diferencia del status
+# de clientes (4 categorías + 'Sin status'), bv_hop_garantia solo trae 3 valores
+# reales (Vigente/Liberado/Vencido); no existe un equivalente de 'Pre Activo'.
+_STATUS_GARANTIA_MAPA = {
+    "vigente": "Vigente",
+    "liberado": "Liberado",
+    "vencido": "Vencido",
+}
+
+
 def normalizar_status(valor):
     """Normaliza el status a una de 4 categorías conocidas, o 'Sin status'
     si viene vacío/nulo o con un valor no reconocido."""
     if pd.isna(valor):
         return "Sin status"
     texto = str(valor).strip().lower()
-    mapa = {
-        "activo": "Activo",
-        "inactivo": "Inactivo",
-        "cancelado": "Cancelado",
-        "pre activo": "Pre Activo",
-    }
-    return mapa.get(texto, "Sin status")
+    return _STATUS_MAPA.get(texto, "Sin status")
 
 
-def normalizar_id_instalacion_col(serie):
-    s = serie.astype(str).str.strip()
-    s = s.str.replace(r"\.0$", "", regex=True)
-    s = s.replace({"": np.nan, "nan": np.nan, "None": np.nan, "<NA>": np.nan})
-    return s
+def normalizar_status_serie(serie):
+    """Version vectorizada de `normalizar_status` para una Series completa
+    (usa .map en vez de .apply fila a fila, más rápido sobre datasets grandes)."""
+    texto = serie.astype("string").str.strip().str.lower()
+    return texto.map(_STATUS_MAPA).fillna("Sin status")
+
+
+def normalizar_status_garantia_serie(serie):
+    """Version vectorizada análoga a `normalizar_status_serie`, pero para los
+    valores propios de `status_garantia` (Vigente/Liberado/Vencido/Sin status)."""
+    texto = serie.astype("string").str.strip().str.lower()
+    return texto.map(_STATUS_GARANTIA_MAPA).fillna("Sin status")
 
 
 def fecha_baja_es_valida(fecha):
@@ -605,6 +727,12 @@ def fecha_baja_es_valida(fecha):
         return pd.Timestamp(fecha).year != 9999
     except (ValueError, TypeError):
         return False
+
+
+def fecha_baja_es_valida_serie(serie_fecha):
+    """Version vectorizada de `fecha_baja_es_valida` para una Series de
+    datetimes ya parseados (pd.to_datetime), sin apply fila a fila."""
+    return serie_fecha.notna() & (serie_fecha.dt.year != 9999)
 
 
 def month_to_spanish_label(year_month):
@@ -666,8 +794,8 @@ def render_mini_alert_card(title, value, subtitle="", icon="", color="#0077CC"):
                 <span class="engie-kpi-icon">{safe_icon}</span>
                 <span class="engie-kpi-title">{safe_title}</span>
             </div>
-            <div class="engie-kpi-main" style="font-size:1.10rem; margin:1px 0 4px 0;">{safe_value}</div>
-            <div class="engie-kpi-sub" style="font-size:0.80rem;">{safe_subtitle}</div>
+            <div class="engie-kpi-main" style="font-size:0.95rem; margin:1px 0 4px 0;">{safe_value}</div>
+            <div class="engie-kpi-sub" style="font-size:0.72rem;">{safe_subtitle}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -794,6 +922,51 @@ def _normalizar_texto(texto):
     texto = unicodedata.normalize("NFKD", str(texto or ""))
     texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
     return " ".join(texto.lower().split())
+
+
+def normalizar_zona_etiqueta(valor):
+    """Normaliza variantes de zona a formato canonico 'Zona N' cuando aplica.
+
+    Ejemplos aceptados: '9', 'zona9', ' ZONA 9 ', 'Zona 09' -> 'Zona 9'.
+    Si no se puede mapear a una zona conocida, devuelve el texto limpio original.
+    """
+    if pd.isna(valor):
+        return ""
+
+    texto = " ".join(str(valor).strip().split())
+    if not texto:
+        return ""
+
+    m = re.search(r"(\d+)", texto)
+    if m:
+        zona_canonica = f"Zona {int(m.group(1))}"
+        if zona_canonica in ZONAS:
+            return zona_canonica
+
+    texto_norm = _normalizar_texto(texto)
+    for zona in ZONAS.keys():
+        if _normalizar_texto(zona) == texto_norm:
+            return zona
+
+    # Estandariza zonas nominales (sin numero) para evitar variaciones de
+    # mayusculas/espacios (p.ej. 'MAYAKAN' vs 'Mayakan').
+    texto_norm = _normalizar_texto(texto)
+    return " ".join(parte.capitalize() for parte in texto_norm.split())
+
+
+def normalizar_zona_serie(serie):
+    """Version vectorizada de normalizacion de etiquetas de zona."""
+    return serie.map(normalizar_zona_etiqueta)
+
+
+def normalizar_zona_clave(valor):
+    """Devuelve una clave comparable (case-insensitive) para filtros de zona."""
+    return _normalizar_texto(normalizar_zona_etiqueta(valor))
+
+
+def normalizar_zona_clave_serie(serie):
+    """Version vectorizada de `normalizar_zona_clave` para Series."""
+    return serie.map(normalizar_zona_clave)
 
 
 def _estilo_capa_kml(nombre_capa):
@@ -944,152 +1117,17 @@ def _dibujar_kml(parent, datos_kml, carpetas_visibles):
 # --- Conexión a la base de datos (pyodbc) ---
 @st.cache_resource
 def get_connection():
-    if "denodo" not in st.secrets:
-        raise RuntimeError(
-            "No se encontró la configuración `denodo` en Streamlit Secrets. "
-            "Configura tus credenciales en Settings > Secrets de Streamlit Cloud."
-        )
-
     cfg = st.secrets["denodo"]
-    conn_str = cfg.get("CONNECTION_STRING", "").strip()
-
-    if not conn_str:
-        required = ["SERVER", "DATABASE", "UID", "PWD"]
-        missing = [key for key in required if not str(cfg.get(key, "")).strip()]
-        if missing:
-            raise RuntimeError(
-                "Faltan claves en `denodo`: "
-                + ", ".join(missing)
-                + ". Define `CONNECTION_STRING` o completa las claves requeridas."
-            )
-
-        dsn = str(cfg.get("DSN", "")).strip()
-        if dsn:
-            conn_str = (
-                f"DSN={dsn};"
-                f"SERVER={cfg['SERVER']};"
-                f"DATABASE={cfg['DATABASE']};"
-                f"UID={cfg['UID']};"
-                f"PWD={cfg['PWD']};"
-                "TrustServerCertificate=Yes"
-            )
-        else:
-            driver = str(cfg.get("DRIVER", "ODBC Driver 18 for SQL Server")).strip()
-            conn_str = (
-                f"DRIVER={{{driver}}};"
-                f"SERVER={cfg['SERVER']};"
-                f"DATABASE={cfg['DATABASE']};"
-                f"UID={cfg['UID']};"
-                f"PWD={cfg['PWD']};"
-                "Encrypt=Yes;"
-                "TrustServerCertificate=Yes"
-            )
-
-    timeout = int(cfg.get("TIMEOUT", 30))
-    return pyodbc.connect(conn_str, timeout=timeout)
-
-
-def _leer_csv_flexible(ruta: Path) -> pd.DataFrame:
-    for enc in ("utf-8-sig", "utf-8", "latin-1"):
-        try:
-            return pd.read_csv(ruta, encoding=enc)
-        except UnicodeDecodeError:
-            continue
-    return pd.read_csv(ruta)
-
-
-def _resolver_ruta_datos(clave_secret: str, default_name: str) -> Path:
-    base = Path(__file__).resolve().parent
-    ruta_cfg = str(st.secrets.get("csv", {}).get(clave_secret, "")).strip() if hasattr(st, "secrets") else ""
-    if ruta_cfg:
-        ruta = Path(ruta_cfg)
-        if not ruta.is_absolute():
-            ruta = (base / ruta).resolve()
-        return ruta
-    return (base / default_name).resolve()
-
-
-def _cargar_clientes_desde_csv(cols_clientes: list[str]) -> pd.DataFrame:
-    ruta = _resolver_ruta_datos("clientes_path", "bv_hop_registroclientes.csv")
-    if not ruta.exists():
-        raise FileNotFoundError(
-            f"No se encontró el CSV de clientes: {ruta}. "
-            "Crea `bv_hop_registroclientes.csv` o define `[csv].clientes_path` en Secrets."
-        )
-
-    df = _leer_csv_flexible(ruta)
-    df = df.rename(columns=lambda c: str(c).strip())
-    missing = [c for c in (cols_clientes + ["status"]) if c not in df.columns]
-    if missing:
-        raise KeyError(
-            "El CSV de clientes no contiene columnas requeridas: "
-            + ", ".join(missing)
-        )
-    return df[cols_clientes + ["status"]].copy()
-
-
-def _cargar_consumo_desde_csv() -> pd.DataFrame:
-    ruta = _resolver_ruta_datos("consumos_path", "bv_hop_consumos.csv")
-    if not ruta.exists():
-        raise FileNotFoundError(
-            f"No se encontró el CSV de consumos: {ruta}. "
-            "Crea `bv_hop_consumos.csv` o define `[csv].consumos_path` en Secrets."
-        )
-
-    con = _leer_csv_flexible(ruta)
-    con = con.rename(columns=lambda c: str(c).strip())
-
-    if "archivado" in con.columns:
-        archivado_num = pd.to_numeric(con["archivado"], errors="coerce")
-        con = con[(archivado_num.fillna(0) == 0)].copy()
-
-    if "fecha" in con.columns:
-        con["fecha"] = pd.to_datetime(con["fecha"], errors="coerce")
-    elif all(c in con.columns for c in ["anio", "mes", "dia"]):
-        anio = pd.to_numeric(con["anio"], errors="coerce")
-        mes = pd.to_numeric(con["mes"], errors="coerce")
-        dia = pd.to_numeric(con["dia"], errors="coerce")
-        con["fecha"] = pd.to_datetime(
-            pd.DataFrame({"year": anio, "month": mes, "day": dia}),
-            errors="coerce",
-        )
-    else:
-        raise KeyError(
-            "El CSV de consumos debe incluir `fecha` o (`anio`, `mes`, `dia`)."
-        )
-
-    consumo_candidatas = [
-        "consumo_gj", "CONSUMO", "consumo", "Consumo", "CONSUMO_GJ", "Consumo_GJ"
-    ]
-    consumo_col = next((c for c in consumo_candidatas if c in con.columns), None)
-    if consumo_col is None:
-        raise KeyError(
-            "El CSV de consumos no contiene columna de consumo. "
-            "Prueba con `consumo_gj` o `CONSUMO`."
-        )
-
-    if "id_instalacion" not in con.columns:
-        raise KeyError("El CSV de consumos debe contener `id_instalacion`.")
-
-    con["id_instalacion"] = normalizar_id_instalacion_col(con["id_instalacion"])
-
-    con = con.dropna(subset=["id_instalacion", "fecha"]).copy()
-    con["consumo_gj"] = pd.to_numeric(con[consumo_col], errors="coerce")
-    con = con.dropna(subset=["consumo_gj"])
-    con = con[con["fecha"] >= pd.Timestamp("2026-01-01")]
-
-    df_consumo_diario = (
-        con.groupby(["id_instalacion", "fecha"], as_index=False)["consumo_gj"]
-        .sum()
-        .sort_values(["id_instalacion", "fecha"])
-        .reset_index(drop=True)
+    conn_str = (
+        f"DSN={cfg['DSN']};"
+        f"SERVER={cfg['SERVER']};"
+        f"DATABASE={cfg['DATABASE']};"
+        f"UID={cfg['UID']};"
+        f"PWD={cfg['PWD']};"
+        "trusted_connection=yes;"
+        "TrustServerCertificate=Yes"
     )
-    return df_consumo_diario
-
-
-def _usar_modo_csv() -> bool:
-    modo = str(st.secrets.get("app", {}).get("data_source", "")).strip().lower() if hasattr(st, "secrets") else ""
-    return modo == "csv"
+    return pyodbc.connect(conn_str)
 
 
 # --- Carga de datos con caché ---
@@ -1102,64 +1140,61 @@ def cargar_datos():
     cualquier rango de fechas exacto. Los distintos periodos (totales,
     mensuales) se construyen sobre la marcha a partir de este detalle
     diario (ver `construir_consumo_mensual`)."""
+    conn = get_connection()
+
     cols = COLS_CLIENTES
 
-    if _usar_modo_csv():
-        df = _cargar_clientes_desde_csv(cols)
-        df_consumo_diario = _cargar_consumo_desde_csv()
-    else:
-        conn = get_connection()
+    r = pd.read_sql(
+        f"SELECT {', '.join(cols + ['status'])} "
+        "FROM bv_hop_registroclientes", conn
+    )
 
-        r = pd.read_sql(
-            f"SELECT {', '.join(cols + ['status'])} "
-            "FROM bv_hop_registroclientes", conn
-        )
+    con = pd.read_sql(
+        "SELECT "
+        "    id_instalacion, "
+        "    EXTRACT(YEAR FROM fecha) AS anio, "
+        "    EXTRACT(MONTH FROM fecha) AS mes, "
+        "    EXTRACT(DAY FROM fecha) AS dia, "
+        "    SUM(consumo_gj) AS CONSUMO "
+        "FROM bv_hop_consumos "
+        "WHERE fecha >= '2026-01-01' "
+        "  AND archivado = 0 "
+        "GROUP BY "
+        "    id_instalacion, "
+        "    EXTRACT(YEAR FROM fecha), "
+        "    EXTRACT(MONTH FROM fecha), "
+        "    EXTRACT(DAY FROM fecha) ",
+        conn
+    )
 
-        con = pd.read_sql(
-            "SELECT "
-            "    id_instalacion, "
-            "    EXTRACT(YEAR FROM fecha) AS anio, "
-            "    EXTRACT(MONTH FROM fecha) AS mes, "
-            "    EXTRACT(DAY FROM fecha) AS dia, "
-            "    SUM(consumo_gj) AS CONSUMO "
-            "FROM bv_hop_consumos "
-            "WHERE fecha >= '2026-01-01' "
-            "  AND archivado = 0 "
-            "GROUP BY "
-            "    id_instalacion, "
-            "    EXTRACT(YEAR FROM fecha), "
-            "    EXTRACT(MONTH FROM fecha), "
-            "    EXTRACT(DAY FROM fecha) ",
-            conn
-        )
+    con = con.rename(columns=lambda c: str(c).strip())
+    consumo_col = next((c for c in con.columns if c.upper() == 'CONSUMO'), None)
+    if consumo_col is None:
+        raise KeyError(f"No se encontró la columna de consumo. Columnas disponibles: {list(con.columns)}")
 
-        con = con.rename(columns=lambda c: str(c).strip())
-        consumo_col = next((c for c in con.columns if c.upper() == 'CONSUMO'), None)
-        if consumo_col is None:
-            raise KeyError(f"No se encontró la columna de consumo. Columnas disponibles: {list(con.columns)}")
+    con['anio'] = pd.to_numeric(con['anio'], errors='coerce').astype('Int64')
+    con['mes'] = pd.to_numeric(con['mes'], errors='coerce').astype('Int64')
+    con['dia'] = pd.to_numeric(con['dia'], errors='coerce').astype('Int64')
+    con = con.dropna(subset=['anio', 'mes', 'dia'])
 
-        con['anio'] = pd.to_numeric(con['anio'], errors='coerce').astype('Int64')
-        con['mes'] = pd.to_numeric(con['mes'], errors='coerce').astype('Int64')
-        con['dia'] = pd.to_numeric(con['dia'], errors='coerce').astype('Int64')
-        con = con.dropna(subset=['anio', 'mes', 'dia'])
+    # Construye la fecha real (día a día) en lugar de colapsar a "AAAA_MM".
+    con['fecha'] = pd.to_datetime(
+        con[['anio', 'mes', 'dia']].astype(int).rename(
+            columns={'anio': 'year', 'mes': 'month', 'dia': 'day'}
+        ),
+        errors='coerce',
+    )
+    con = con.dropna(subset=['fecha'])
 
-        con['fecha'] = pd.to_datetime(
-            con[['anio', 'mes', 'dia']].astype(int).rename(
-                columns={'anio': 'year', 'mes': 'month', 'dia': 'day'}
-            ),
-            errors='coerce',
-        )
-        con = con.dropna(subset=['fecha'])
+    df_consumo_diario = (
+        con[['id_instalacion', 'fecha', consumo_col]]
+        .rename(columns={consumo_col: 'consumo_gj'})
+        .sort_values(['id_instalacion', 'fecha'])
+        .reset_index(drop=True)
+    )
+    df_consumo_diario['consumo_gj'] = pd.to_numeric(df_consumo_diario['consumo_gj'], errors='coerce')
 
-        df_consumo_diario = (
-            con[['id_instalacion', 'fecha', consumo_col]]
-            .rename(columns={consumo_col: 'consumo_gj'})
-            .sort_values(['id_instalacion', 'fecha'])
-            .reset_index(drop=True)
-        )
-        df_consumo_diario['consumo_gj'] = pd.to_numeric(df_consumo_diario['consumo_gj'], errors='coerce')
-
-        df = r[cols + ['status']].copy()
+    df = r[cols + ['status']].copy()
 
     # Normalización del código postal (5 dígitos) para la geocodificación.
     df['cp_localizacion'] = (
@@ -1179,16 +1214,38 @@ def cargar_datos():
     _firm_str = _firme.map(lambda v: f"Firm Spread (USD/GJ): {v:.2f}").where(_firme.notna(), "")
     _sep = ((_vol_str != "") & (_firm_str != "")).map({True: "<br>", False: ""})
     df['spread_popup'] = _vol_str + _sep + _firm_str
-    df['status_norm'] = df['status'].apply(normalizar_status)
-    df['zona'] = df['zona_vpm'].astype(str).str.strip()
-
-    if 'id_instalacion' in df.columns:
-        df['id_instalacion'] = normalizar_id_instalacion_col(df['id_instalacion'])
-    if 'id_instalacion' in df_consumo_diario.columns:
-        df_consumo_diario['id_instalacion'] = normalizar_id_instalacion_col(df_consumo_diario['id_instalacion'])
-        df_consumo_diario = df_consumo_diario.dropna(subset=['id_instalacion'])
+    df['status_norm'] = normalizar_status_serie(df['status'])
+    df['zona_vpm'] = normalizar_zona_serie(df['zona_vpm'])
+    df['zona'] = df['zona_vpm']
 
     return df, df_consumo_diario
+
+
+@st.cache_data(ttl=3600)
+def cargar_datos_garantias():
+    """Devuelve el detalle de garantías (bv_hop_garantia), una fila por
+    garantía/documento. Análogo a `cargar_datos()` pero para la pestaña
+    Garantías; no incluye consumo diario (esa tabla no aplica aquí).
+
+    Adaptaciones respecto a `cargar_datos()` (bv_hop_garantia no tiene una
+    tabla de zonas geográficas como ZONAS, así que se usa `ldc` como
+    dimensión equivalente a 'zona'):
+      - 'zona' se deriva de `ldc` (en vez de `zona_vpm`).
+      - 'status_norm' usa `normalizar_status_garantia_serie` (3 categorías
+        reales: Vigente/Liberado/Vencido, más 'Sin status')."""
+    conn = get_connection()
+
+    cols = COLS_GARANTIA
+
+    df = pd.read_sql(
+        f"SELECT {', '.join(cols)} FROM bv_hop_garantia", conn
+    )
+
+    df = df.dropna(subset=['razon_social'])
+    df['status_norm'] = normalizar_status_garantia_serie(df['status_garantia'])
+    df['zona'] = df['ldc'].astype(str).str.strip()
+
+    return df
 
 
 def construir_consumo_mensual(df_consumo_diario, fecha_ini=None, fecha_fin=None):
@@ -1240,10 +1297,7 @@ def _consumo_total_cached(fecha_ini, fecha_fin):
     """Versión cacheada de sumar_consumo_periodo, indexada por (fecha_ini, fecha_fin).
     Evita re-agrupar el detalle diario en cada interacción de la UI."""
     _, consumo_diario = cargar_datos()
-    total = sumar_consumo_periodo(consumo_diario, fecha_ini, fecha_fin).reset_index()
-    if 'id_instalacion' in total.columns:
-        total['id_instalacion'] = normalizar_id_instalacion_col(total['id_instalacion'])
-    return total
+    return sumar_consumo_periodo(consumo_diario, fecha_ini, fecha_fin).reset_index()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1251,10 +1305,7 @@ def _consumo_mensual_cached(fecha_ini, fecha_fin):
     """Versión cacheada de construir_consumo_mensual, indexada por (fecha_ini, fecha_fin).
     Evita re-ejecutar el pivot_table sobre el detalle diario en cada rerun."""
     _, consumo_diario = cargar_datos()
-    mensual = construir_consumo_mensual(consumo_diario, fecha_ini, fecha_fin)
-    if 'id_instalacion' in mensual.columns:
-        mensual['id_instalacion'] = normalizar_id_instalacion_col(mensual['id_instalacion'])
-    return mensual
+    return construir_consumo_mensual(consumo_diario, fecha_ini, fecha_fin)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1323,7 +1374,7 @@ def _polys():
 def asignar_zona(df):
     """Usa la zona ya definida en el Excel (columna 'Zonas' -> zona_vpm)."""
     df = df.copy()
-    df['zona_vpm'] = df['zona_vpm'].astype(str).str.strip()
+    df['zona_vpm'] = normalizar_zona_serie(df['zona_vpm'])
     df['zona'] = df['zona_vpm']
     return df
 
@@ -1443,6 +1494,195 @@ class HomeButtonControl(MacroElement):
         self.position = position
 
 
+@st.cache_resource(show_spinner=False)
+def _cargar_textura_tierra():
+    """Carga `earth_texture.jpg` (imagen equirectangular real de la Tierra,
+    ubicada junto a este script) y la devuelve como array numpy RGB. Se usa
+    una resolución alta (2700x1350) para que el zoom final hacia México no
+    se vea borroso/pixelado. Se cachea una sola vez por proceso de
+    Streamlit."""
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "earth_texture.jpg")
+    try:
+        img = Image.open(ruta).convert("RGB").resize((2700, 1350), Image.LANCZOS)
+        return np.asarray(img)
+    except Exception:
+        return None
+
+
+def _proyectar_orto_textura(textura, lon0_deg, lat0_deg, radio_px, size, canvas_r, roll_deg=0.0):
+    """Remapea la textura equirectangular a una proyección ortográfica (vista
+    de esfera 3D real) centrada en (lat0_deg, lon0_deg), con `radio_px` como
+    radio aparente de la esfera en píxeles (mayor que `canvas_r` = efecto de
+    zoom, ya que solo se ve una porción más pequeña y central del planeta).
+    `roll_deg` inclina el eje de rotación visible (como la inclinación axial
+    real de la Tierra, ~23°), rotando el plano de la imagen antes de
+    proyectar, para que el planeta no gire siempre "derecho".
+    Devuelve una imagen PIL RGBA (transparente fuera del disco)."""
+    H, W, _ = textura.shape
+    cx = cy = size / 2
+    yi, xi = np.mgrid[0:size, 0:size]
+    x = xi - cx
+    y = cy - yi  # y positivo hacia arriba
+
+    if roll_deg:
+        rr = np.radians(roll_deg)
+        cr, sr = np.cos(rr), np.sin(rr)
+        x, y = x * cr - y * sr, x * sr + y * cr
+
+    rho = np.sqrt(x ** 2 + y ** 2)
+    visible = rho <= canvas_r
+    rho_c = np.clip(rho, 1e-9, radio_px)
+    c = np.arcsin(np.clip(rho_c / radio_px, -1, 1))
+    lat0 = np.radians(lat0_deg)
+    lon0 = np.radians(lon0_deg)
+    sin_c, cos_c = np.sin(c), np.cos(c)
+    lat = np.arcsin(cos_c * np.sin(lat0) + (y * sin_c * np.cos(lat0)) / rho_c)
+    lon = lon0 + np.arctan2(x * sin_c, rho_c * np.cos(lat0) * cos_c - y * sin_c * np.sin(lat0))
+
+    lon_deg = (np.degrees(lon) + 180) % 360 - 180
+    lat_deg = np.clip(np.degrees(lat), -90, 90)
+    col = ((lon_deg + 180) / 360 * W).astype(int) % W
+    row = np.clip(((90 - lat_deg) / 180 * H).astype(int), 0, H - 1)
+
+    out = np.zeros((size, size, 4), dtype=np.uint8)
+    out[visible, :3] = textura[row[visible], col[visible]]
+    out[visible, 3] = 255
+    return Image.fromarray(out, mode="RGBA")
+
+
+def _geometria_rotacion_fija(lat0_deg, radio_px, size, canvas_r, roll_deg, H, W):
+    """Precalcula toda la geometría de la proyección ortográfica que NO
+    depende de la longitud (lon0) cuando lat0/radio/roll se mantienen fijos
+    (fase de giro puro del planeta, la mayoría de los fotogramas). Con
+    lat0/radio/roll constantes, la fila de textura (`row`) y el offset
+    angular de longitud (`delta_lon_deg`) resultan CONSTANTES por píxel: lo
+    único que cambia entre fotogramas es `lon0`, que se suma directo a
+    `delta_lon_deg`. Esto evita recalcular arcsin/arctan2 sobre toda la
+    grilla en cada fotograma, dejando solo una suma + módulo + indexado."""
+    cx = cy = size / 2
+    yi, xi = np.mgrid[0:size, 0:size]
+    x = xi - cx
+    y = cy - yi
+
+    if roll_deg:
+        rr = np.radians(roll_deg)
+        cr, sr = np.cos(rr), np.sin(rr)
+        x, y = x * cr - y * sr, x * sr + y * cr
+
+    rho = np.sqrt(x ** 2 + y ** 2)
+    visible = rho <= canvas_r
+    rho_c = np.clip(rho, 1e-9, radio_px)
+    c = np.arcsin(np.clip(rho_c / radio_px, -1, 1))
+    lat0 = np.radians(lat0_deg)
+    sin_c, cos_c = np.sin(c), np.cos(c)
+    lat = np.arcsin(cos_c * np.sin(lat0) + (y * sin_c * np.cos(lat0)) / rho_c)
+    delta = np.arctan2(x * sin_c, rho_c * np.cos(lat0) * cos_c - y * sin_c * np.sin(lat0))
+
+    lat_deg = np.clip(np.degrees(lat), -90, 90)
+    row = np.clip(((90 - lat_deg) / 180 * H).astype(int), 0, H - 1)
+    delta_lon_deg = np.degrees(delta)
+    return visible, row, delta_lon_deg
+
+
+def _frame_rotacion_rapida(textura, visible, row, delta_lon_deg, lon0_deg, size, W):
+    """Genera un fotograma reutilizando la geometría precalculada por
+    `_geometria_rotacion_fija`; solo desplaza la longitud del frame actual,
+    mucho más barato que recalcular la proyección ortográfica completa."""
+    lon_deg = (lon0_deg + delta_lon_deg + 180) % 360 - 180
+    col = ((lon_deg + 180) / 360 * W).astype(int) % W
+    out = np.zeros((size, size, 4), dtype=np.uint8)
+    out[visible, :3] = textura[row[visible], col[visible]]
+    out[visible, 3] = 255
+    return Image.fromarray(out, mode="RGBA")
+
+
+def mostrar_intro_globo(destino_lat, destino_lon, zoom_destino=7.0):
+    """Animación de introducción con un globo terráqueo REAL: remapea la
+    imagen `earth_texture.jpg` (textura satelital real) a una proyección
+    ortográfica (esfera 3D genuina, calculada con la fórmula inversa de
+    proyección ortográfica) fotograma a fotograma, primero girando el
+    planeta y luego haciendo zoom hacia México. Cada fotograma se muestra
+    como una imagen PNG embebida (base64) sobre el MISMO `st.empty()`
+    placeholder (elemento HTML nativo, no un componente con iframe, por lo
+    que no hay parpadeo por remount). Solo se ejecuta una vez por sesión de
+    Streamlit (`st.session_state`)."""
+    if st.session_state.get("intro_globo_mostrada"):
+        return
+    st.session_state["intro_globo_mostrada"] = True
+
+    textura = _cargar_textura_tierra()
+    if textura is None:
+        return  # earth_texture.jpg no disponible: se omite la intro sin error visible
+
+    placeholder = st.empty()
+    ALTO_CONTENEDOR = 600  # mismo alto que st_folium(..., height=600) para no saltar de tamaño
+    SIZE = 460
+    CANVAS_R = SIZE / 2 - 6
+    TILT = 20.0  # inclinación axial visible, similar a la de la Tierra real (~23.4°)
+
+    def _html_de_imagen(img):
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        return f"""
+        <div style="display:flex;justify-content:center;align-items:center;
+                    width:100%;height:{ALTO_CONTENEDOR}px;
+                    background:radial-gradient(ellipse at center, #060912 0%, #000103 75%);
+                    border-radius:16px;box-sizing:border-box;">
+            <img src="data:image/png;base64,{b64}" width="{SIZE}" height="{SIZE}"
+                 style="border-radius:50%;display:block;
+                        box-shadow:0 0 55px rgba(80,170,255,0.55), 0 0 130px rgba(60,140,255,0.3);" />
+        </div>
+        """
+
+    def _frame_html(lon0, lat0, radio_px, roll=TILT):
+        img = _proyectar_orto_textura(textura, lon0, lat0, radio_px, SIZE, CANVAS_R, roll_deg=roll)
+        return _html_de_imagen(img)
+
+    # Fase de giro: lat0/radio/roll fijos, solo cambia la longitud. Se
+    # precalcula la geometría UNA vez (arcsin/arctan2 sobre toda la grilla)
+    # y cada fotograma solo hace una suma + módulo + indexado, en vez de
+    # recalcular la proyección ortográfica completa 100 veces.
+    H, W, _ = textura.shape
+    visible_giro, row_giro, delta_lon_giro = _geometria_rotacion_fija(
+        12, CANVAS_R, SIZE, CANVAS_R, TILT, H, W
+    )
+
+    pasos_giro = 100
+    lon = -50.0
+    for i in range(pasos_giro):
+        lon = -50 + i * (360 / pasos_giro)  # una vuelta completa, suave
+        img = _frame_rotacion_rapida(textura, visible_giro, row_giro, delta_lon_giro, lon, SIZE, W)
+        placeholder.markdown(_html_de_imagen(img), unsafe_allow_html=True)
+        time.sleep(0.014)
+
+    pasos_zoom = 16
+    lon_ini, lat_ini = lon, 12
+    # Fase 1: primero solo gira/inclina hasta encuadrar México a zoom 1x
+    # (evita "pasar zoomeado" por otros países en el camino).
+    for i in range(1, pasos_zoom + 1):
+        t = i / pasos_zoom
+        t_suave = t * t * (3 - 2 * t)
+        lon_i = lon_ini + (destino_lon - lon_ini) * t_suave
+        lat_i = lat_ini + (destino_lat - lat_ini) * t_suave
+        roll_i = TILT * (1 - t_suave)
+        placeholder.markdown(_frame_html(lon_i, lat_i, CANVAS_R, roll=roll_i), unsafe_allow_html=True)
+        time.sleep(0.04)
+
+    # Fase 2: ya centrado y sin inclinación, ahora sí hace zoom hacia México.
+    pasos_acercar = 14
+    for i in range(1, pasos_acercar + 1):
+        t = i / pasos_acercar
+        t_suave = t * t * (3 - 2 * t)
+        radio_i = CANVAS_R * (1 + (zoom_destino - 1) * t_suave)
+        placeholder.markdown(_frame_html(destino_lon, destino_lat, radio_i, roll=0.0), unsafe_allow_html=True)
+        time.sleep(0.045)
+
+    time.sleep(0.4)
+    placeholder.empty()
+
+
+
 # --- Construcción del mapa (objeto folium) ---
 def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min_gj=0, cp_marker=None):
     m = folium.Map(
@@ -1513,12 +1753,16 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
             usar_cluster = len(df_z) >= UMBRAL_CLUSTER
 
             if not usar_cluster:
-                def color_de(c):
-                    if c <= l1: return '#CCD4DA'
-                    if c <= l2: return '#7FA8D8'
-                    if c <= l3: return '#278CBC'
-                    if c <= l4: return '#007BC5'
-                    return '#005C9A'
+                # Colores/radios calculados una sola vez, vectorizado con numpy,
+                # en vez de llamar a una función Python (color_de) por cada fila
+                # dentro del loop de creación de marcadores.
+                consumo_arr = pd.to_numeric(df_z[col_consumo], errors='coerce').fillna(0).to_numpy(dtype=float)
+                radios_arr = 5 + (consumo_arr / max_c) * 25
+                colores_arr = np.select(
+                    [consumo_arr <= l1, consumo_arr <= l2, consumo_arr <= l3, consumo_arr <= l4],
+                    ['#CCD4DA', '#7FA8D8', '#278CBC', '#007BC5'],
+                    default='#005C9A',
+                )
 
                 fg = folium.FeatureGroup(name=f"Clientes {zona_sel}")
                 columnas = df_z.columns
@@ -1531,10 +1775,10 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                 idx_nombre = columnas.get_loc('bp') if 'bp' in columnas else columnas.get_loc('razon_social')
                 idx_spread = columnas.get_loc('spread_popup') if 'spread_popup' in columnas else None
 
-                for row in df_z.itertuples(index=False, name=None):
-                    c = float(row[idx_consumo])
-                    radio = 5 + (c / max_c) * 25
-                    col = color_de(c)
+                for i, row in enumerate(df_z.itertuples(index=False, name=None)):
+                    c = consumo_arr[i]
+                    radio = radios_arr[i]
+                    col = colores_arr[i]
                     spread_html = row[idx_spread] if idx_spread is not None else ''
                     tooltip_parts = [
                         f"<b>{row[idx_nombre]}</b><br>",
@@ -1550,7 +1794,6 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                         location=[row[idx_lat], row[idx_lon]],
                         radius=radio,
                         color=col,
-                       
                         fill=True,
                         fill_color=col,
                         fill_opacity=0.7,
@@ -1608,7 +1851,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                 """
                 callback = (callback.replace('MAXC', str(max_c))
                             .replace('L1', str(l1)).replace('L2', str(l2))
-                            .replace('L3', str(l3)).replace('L4', str(c4)))  # corregido: era str(c4)
+                            .replace('L3', str(l3)).replace('L4', str(l4)))
 
                 icon_create = """
                 function(cluster) {
@@ -1648,7 +1891,20 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                     icon_create_function=icon_create
                 ).add_to(m)
 
-        m.fit_bounds(bounds_zona(zona_sel))
+        if zona_sel in ZONAS:
+            m.fit_bounds(bounds_zona(zona_sel))
+        elif not df_z.empty:
+            lat_min = float(df_z['lat'].min())
+            lat_max = float(df_z['lat'].max())
+            lon_min = float(df_z['lon'].min())
+            lon_max = float(df_z['lon'].max())
+            if lat_min == lat_max:
+                lat_min -= 0.15
+                lat_max += 0.15
+            if lon_min == lon_max:
+                lon_min -= 0.15
+                lon_max += 0.15
+            m.fit_bounds([[lat_min, lon_min], [lat_max, lon_max]])
 
     # --- Marcador de búsqueda por código postal ---
     if cp_marker:
@@ -1698,6 +1954,18 @@ def sync_gj_global_from_exact():
     st.session_state["min_gj_global_slider"] = valor
 
 
+def sync_zona_widget_unica():
+    """Mantiene una sola zona seleccionada y conserva la mas reciente."""
+    seleccionadas = st.session_state.get("zona_widget_multi", [])
+    if not seleccionadas:
+        st.session_state["zona_widget"] = "Vista general"
+        return
+
+    zona_activa = seleccionadas[-1]
+    st.session_state["zona_widget_multi"] = [zona_activa]
+    st.session_state["zona_widget"] = zona_activa
+
+
 # --- Interfaz ---
 
 # ===== SIDEBAR DE NAVEGACIÓN =====
@@ -1705,36 +1973,24 @@ with st.sidebar:
     st.image("logo_engie_blanco.png", width=140)
     st.markdown('<div class="engie-sub">Data & Digital for Gas Commercial</div>', unsafe_allow_html=True)
     periodo_sidebar_container = st.container()
-    st.markdown('<div class="engie-section">Status de clientes</div>', unsafe_allow_html=True)
-    _status_options = ["Activo", "Inactivo", "Cancelado", "Pre Activo", "Sin status"]
-    if "status_filter_gas" not in st.session_state:
-        st.session_state.status_filter_gas = ["Activo"]
-    selected_status_gas = st.multiselect(
-        "Status de clientes a mostrar",
-        _status_options,
-        key="status_filter_gas",
-        label_visibility="collapsed",
-        placeholder="Selecciona status",
-        help="Filtra el mapa, tabla de clientes y Top 10 por status.",
-    )
-    if not selected_status_gas:
-        st.warning("Selecciona al menos un status para ver clientes.")
-
     st.markdown('<div class="engie-section">Navegación</div>', unsafe_allow_html=True)
     seccion = st.radio(
         "Menú",
-        ["🗺️  Mapa", "📄  Reportes", "📊  Dashboard", "👛  Cartera"],
+        # Cartera y Garantías se fusionaron en una única vista reutilizable
+        # (ver sección "SALUD Y CICLO DE VIDA"); el selector Clientes/Garantías
+        # vive dentro de esa vista, arriba a la derecha.
+        ["🗺️  Mapa", "📄  Reportes", "📊  Dashboard", "💼  Gestión Comercial"],
         label_visibility="collapsed",
     )
 
+_status_options = ["Activo", "Inactivo", "Cancelado", "Pre Activo", "Sin status"]
+if "status_filter_gas" not in st.session_state:
+    st.session_state.status_filter_gas = ["Activo"]
+selected_status_gas = st.session_state.get("status_filter_gas", ["Activo"])
+
 # ===== CARGA Y FILTRADO (común a todas las secciones) =====
 with st.spinner("Consultando la base de datos..."):
-    try:
-        resultado, consumo_diario = cargar_datos()
-    except Exception as exc:
-        st.error("No se pudo conectar/cargar datos desde Denodo.")
-        st.exception(exc)
-        st.stop()
+    resultado, consumo_diario = cargar_datos()
 resultado_todos_status = resultado.copy()
 
 # --- Filtro de status (aplicado antes de todo el análisis) ---
@@ -1744,8 +2000,6 @@ else:
     resultado = resultado.iloc[0:0].copy()
 
 st.title("Registro de Clientes y Consumos Diarios")
-if _usar_modo_csv():
-    st.info("Modo temporal CSV activo (sin conexión a Denodo).")
 
 # Nota: el filtro por Id de Instalación se define de forma independiente
 # dentro de cada sección (Mapa, Clientes, Top 10), para que no afecte a las demás.
@@ -1811,12 +2065,50 @@ if periodos_referencia:
     anio_ref, mes_ref = sorted(periodos_referencia)[-1]
     mes_ref_cartera = f"{anio_ref:04d}-{mes_ref:02d}"
 
-opciones_zona = ["Vista general"] + list(ZONAS.keys())
+# Opciones del filtro de zona: zonas con poligono + zonas nominales presentes
+# en datos (ej. "Mayakan"), para que Reportes/Dashboard puedan filtrarlas.
+zonas_datos = []
+if 'zona_vpm' in df_mostrar.columns:
+    zonas_datos = (
+        normalizar_zona_serie(df_mostrar['zona_vpm'])
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .tolist()
+    )
+    zonas_datos = [
+        z for z in zonas_datos
+        if z and _normalizar_texto(z) not in {"", "nan", "none", "sin zona"}
+    ]
+
+zonas_extra = sorted(
+    {z for z in zonas_datos if z not in ZONAS},
+    key=lambda x: x.casefold(),
+)
+opciones_zona = ["Vista general"] + list(ZONAS.keys()) + zonas_extra
 if "zona_widget" not in st.session_state:
     st.session_state.zona_widget = "Vista general"
+if "zona_widget_multi" not in st.session_state:
+    st.session_state.zona_widget_multi = [] if st.session_state.zona_widget == "Vista general" else [st.session_state.zona_widget]
+if st.session_state.zona_widget not in opciones_zona:
+    st.session_state.zona_widget = "Vista general"
+if st.session_state.zona_widget_multi:
+    zona_multi_actual = st.session_state.zona_widget_multi[0]
+    if zona_multi_actual not in opciones_zona:
+        st.session_state.zona_widget_multi = []
 
 if "pending_zona" in st.session_state:
-    st.session_state.zona_widget = st.session_state.pop("pending_zona")
+    zona_pendiente = st.session_state.pop("pending_zona")
+    if zona_pendiente in ZONAS:
+        st.session_state.zona_widget_multi = [zona_pendiente]
+        st.session_state.zona_widget = zona_pendiente
+    else:
+        st.session_state.zona_widget_multi = []
+        st.session_state.zona_widget = "Vista general"
+elif st.session_state.zona_widget_multi:
+    st.session_state.zona_widget = st.session_state.zona_widget_multi[0]
+else:
+    st.session_state.zona_widget = "Vista general"
 
 # df_geo cacheado: solo se recalcula cuando cambian el status o el rango de fechas,
 # y se construye solo en secciones que realmente lo usan.
@@ -1836,6 +2128,23 @@ if not df_geo.empty and 'Consumo_Total_Periodo_GJ' in df_geo.columns:
 st.session_state["max_gj_global"] = max_gj_global
 
 with st.sidebar:
+    st.markdown('<div class="engie-section">Filtrar por zona</div>', unsafe_allow_html=True)
+    zonas_seleccionadas = st.multiselect(
+        "Filtrar por zona",
+        options=[z for z in opciones_zona if z != "Vista general"],
+        key="zona_widget_multi",
+        placeholder="Vista general",
+        label_visibility="collapsed",
+        on_change=sync_zona_widget_unica,
+        help="Solo permite 1 zona activa; al elegir otra, reemplaza automaticamente la anterior.",
+    )
+    if len(zonas_seleccionadas) > 1:
+        zona_activa = zonas_seleccionadas[-1]
+        st.session_state.zona_widget_multi = [zona_activa]
+        st.session_state.zona_widget = zona_activa
+    else:
+        st.session_state.zona_widget = zonas_seleccionadas[0] if zonas_seleccionadas else "Vista general"
+
     st.markdown('<div class="engie-section">Filtro de volumen</div>', unsafe_allow_html=True)
     #st.caption("Aplica a Mapa, Reportes y Top 10 según el consumo total del periodo.")
     if max_gj_global > 0:
@@ -1860,15 +2169,27 @@ with st.sidebar:
     else:
         st.caption("Sin consumo para aplicar filtro de GJ en el contexto actual.")
 
+    st.markdown('<div class="engie-section">Status de clientes</div>', unsafe_allow_html=True)
+    selected_status_gas = st.multiselect(
+        "Status de clientes a mostrar",
+        _status_options,
+        key="status_filter_gas",
+        label_visibility="collapsed",
+        placeholder="Selecciona status",
+        help="Filtra el mapa, tabla de clientes y Top 10 por status.",
+    )
+    if not selected_status_gas:
+        st.warning("Selecciona al menos un status para ver clientes.")
+
     st.markdown('<div class="engie-section">Datos</div>', unsafe_allow_html=True)
-    if st.button("🔄  Cargar / Actualizar datos", width='stretch'):
+    if st.button("🔄  Cargar / Actualizar datos", use_container_width=True):
         st.cache_data.clear()
 
 min_gj_global = int(st.session_state.get("min_gj_global", 0)) if max_gj_global > 0 else 0
 if max_gj_global > 0:
     min_gj_global = max(0, min(min_gj_global, max_gj_global))
 
-# Guardar df_geo sin el filtro de GJ para los gráficos de distribución por zona
+# Guardar df_geo sin el filtro de GJ para los graficos de distribucion por zona
 df_geo_todas_zonas = df_geo.copy()
 
 if min_gj_global > 0 and not df_geo.empty:
@@ -1876,16 +2197,494 @@ if min_gj_global > 0 and not df_geo.empty:
         pd.to_numeric(df_geo['Consumo_Total_Periodo_GJ'], errors='coerce').fillna(0) >= min_gj_global
     ].copy()
 
+# ===== FILTRO GLOBAL DE ZONA (alcance GLOBAL, igual que el filtro de volumen) =====
+# Afecta Reportes y Dashboard directamente sobre df_geo. El Mapa usa aparte
+# `df_geo_pre_zona` (sin este filtro) para seguir mostrando los totales reales
+# de todas las zonas en los polígonos; sus marcadores ya se limitan a la zona
+# elegida mediante el parámetro `zona_sel` de `crear_mapa`.
+df_geo_pre_zona = df_geo.copy()
+zona_sel_global = st.session_state.get("zona_widget", "Vista general")
+zona_sel_global_norm = normalizar_zona_clave(zona_sel_global)
+if zona_sel_global != "Vista general" and not df_geo.empty and 'zona' in df_geo.columns:
+    zonas_norm = normalizar_zona_clave_serie(df_geo['zona'])
+    df_geo = df_geo[zonas_norm == zona_sel_global_norm].copy()
+
+
+# ============================================================
+# VISTA REUTILIZABLE: SALUD Y CICLO DE VIDA (Cartera / Garantías)
+# ============================================================
+# Refactor (2026-08-28): Cartera y Garantías compartían exactamente el mismo
+# layout/lógica y solo diferían en el origen de datos y algunas etiquetas.
+# Se fusionaron en una única vista reutilizable (`render_salud_ciclo_vida`)
+# parametrizada por un diccionario de configuración (CARTERA_CONFIG /
+# GARANTIAS_CONFIG, definidos más abajo). Un selector arriba a la derecha de
+# la sección decide qué configuración/dataset se renderiza en cada rerun.
+
+def _pct_generico(n, total, sufijo):
+    """Formatea 'n' como % de 'total' + sufijo (p.ej. 'de la cartera')."""
+    return f"{n / total:.1%} {sufijo}" if total else None
+
+
+def _nivel_riesgo_vencimiento(dias):
+    """Etiqueta de riesgo según días restantes a la vigencia (usada por
+    Cartera y Garantías por igual)."""
+    if pd.isna(dias):
+        return "N/D"
+    dias = int(dias)
+    if dias <= 7:
+        return "🔴 Riesgo crítico"
+    if dias <= 30:
+        return "🟠 Riesgo alto"
+    if dias <= 60:
+        return "🟡 Riesgo medio"
+    return "🟢 Riesgo bajo"
+
+
+def render_salud_ciclo_vida(cfg):
+    """Renderiza la vista de 'Salud y ciclo de vida' (filtro, tarjetas KPI,
+    gráfico de altas/bajas, detalle histórico y alertas de vigencia),
+    reutilizable tanto para Cartera como para Garantías. `cfg` concentra
+    todas las diferencias entre ambas fuentes de datos (columnas, etiquetas,
+    status disponibles, colores, etc.), manteniendo idéntico el layout."""
+    st.subheader(cfg["subheader"])
+    st.caption(cfg["caption"])
+
+    # --- Carga de datos (con o sin spinner, según la fuente) ---
+    if cfg["spinner_msg"]:
+        with st.spinner(cfg["spinner_msg"]):
+            base_df = cfg["data_loader"]()
+    else:
+        base_df = cfg["data_loader"]()
+
+    # --- Filtro por zona/LDC (conserva el mismo selectbox de siempre) ---
+    opciones_filtro = [cfg["selector_placeholder"]] + cfg["selector_options_fn"](base_df)
+    valor_filtro = st.selectbox(
+        cfg["selector_label"],
+        opciones_filtro,
+        key=cfg["selector_key"],
+    )
+
+    if valor_filtro != cfg["selector_placeholder"]:
+        ciclo_base = base_df[base_df[cfg["filter_column"]] == valor_filtro].copy()
+    else:
+        ciclo_base = base_df.copy()
+
+    if ciclo_base.empty:
+        st.info(cfg["empty_base_msg"])
+        return
+
+    ciclo_df = ciclo_base.copy()
+    ciclo_df["status_norm"] = cfg["status_normalizer"](ciclo_df[cfg["status_column"]])
+    ciclo_df["fecha_pes_efectiva"] = pd.to_datetime(ciclo_df[cfg["fecha_pes_col"]], errors="coerce")
+    ciclo_df["fecha_baja_efectiva"] = pd.to_datetime(ciclo_df[cfg["fecha_baja_col"]], errors="coerce")
+    ciclo_df["vigencia"] = pd.to_datetime(ciclo_df[cfg["vigencia_col"]], errors="coerce")
+    ciclo_df["baja_valida"] = fecha_baja_es_valida_serie(ciclo_df["fecha_baja_efectiva"])
+
+    total_ciclo = len(ciclo_df)
+    conteo_status = ciclo_df["status_norm"].value_counts()
+
+    conteos = {card["status"]: int(conteo_status.get(card["status"], 0)) for card in cfg["status_cards"]}
+    sin_status_n = int(conteo_status.get("Sin status", 0))
+    base_para_churn = sum(conteos.values())
+
+    # --- Tarjetas KPI de status (cantidad dinámica según cfg["status_cards"]) ---
+    kpi_cols = st.columns(len(cfg["status_cards"]) + 1)
+    for col, card in zip(kpi_cols, cfg["status_cards"]):
+        with col:
+            render_kpi_card(
+                title=card["title"],
+                value=f"{conteos[card['status']]:,}",
+                subtitle=_pct_generico(conteos[card["status"]], total_ciclo, cfg["pct_suffix"]) or "Sin datos",
+                icon=card["icon"],
+                accent_color=card["color"],
+            )
+    with kpi_cols[-1]:
+        subtitle_sin_status = _pct_generico(sin_status_n, total_ciclo, cfg["pct_suffix"]) if total_ciclo else "Sin datos"
+        if sin_status_n:
+            subtitle_sin_status = f"{subtitle_sin_status} · Revisar origen"
+        render_kpi_card(
+            title="SIN STATUS",
+            value=f"{sin_status_n:,}",
+            subtitle=subtitle_sin_status,
+            icon="🔹",
+            accent_color="#66C2FF",
+        )
+
+    st.write("")
+
+    if mes_ref_cartera:
+        bajas_mes = ciclo_df[
+            ciclo_df["baja_valida"] & (ciclo_df["fecha_baja_efectiva"].dt.strftime("%Y-%m") == mes_ref_cartera)
+        ]
+        altas_mes = ciclo_df[
+            ciclo_df["fecha_pes_efectiva"].notna() & (ciclo_df["fecha_pes_efectiva"].dt.strftime("%Y-%m") == mes_ref_cartera)
+        ]
+        tasa_churn = (len(bajas_mes) / base_para_churn) if base_para_churn else 0
+        tasa_activacion = (len(altas_mes) / total_ciclo) if total_ciclo else 0
+
+        kc_a, kc_b = st.columns(2)
+        with kc_a:
+            render_kpi_card(
+                title=f"BAJAS · {month_to_spanish_label(mes_ref_cartera).upper()}",
+                value=f"{len(bajas_mes):,}",
+                subtitle=f"{cfg['churn_label']}: {tasa_churn:.2%}",
+                icon="📉",
+                accent_color="#E03131",
+            )
+        with kc_b:
+            render_kpi_card(
+                title=f"ALTAS · {month_to_spanish_label(mes_ref_cartera).upper()}",
+                value=f"{len(altas_mes):,}",
+                subtitle=f"{cfg['activation_label']}: {tasa_activacion:.2%}",
+                icon="📈",
+                accent_color="#0077CC",
+            )
+    else:
+        st.info("No hay referencia de mes para calcular altas y bajas del periodo filtrado.")
+
+    st.write("")
+    st.markdown("**Altas y bajas por mes (histórico)**")
+
+    altas_serie = (
+        ciclo_df[ciclo_df["fecha_pes_efectiva"].notna()]
+        .assign(AñoMes=lambda d: d["fecha_pes_efectiva"].dt.to_period("M").astype(str))
+        .groupby("AñoMes").size().rename("Altas")
+    )
+    bajas_serie = (
+        ciclo_df[ciclo_df["baja_valida"]]
+        .assign(AñoMes=lambda d: d["fecha_baja_efectiva"].dt.to_period("M").astype(str))
+        .groupby("AñoMes").size().rename("Bajas")
+    )
+
+    timeline = pd.concat([altas_serie, bajas_serie], axis=1).fillna(0).sort_index().reset_index()
+    timeline = timeline.rename(columns={"index": "AñoMes"})
+    timeline["Altas"] = timeline["Altas"].astype(int)
+    timeline["Bajas"] = timeline["Bajas"].astype(int)
+    timeline["Neto"] = timeline["Altas"] - timeline["Bajas"]
+
+    if timeline.empty:
+        st.info(cfg["timeline_empty_msg"])
+    else:
+        color_altas = [
+            BRAND_COLORS["accent"] if mes == mes_ref_cartera else BRAND_COLORS["primary"]
+            for mes in timeline["AñoMes"]
+        ]
+        color_bajas = [
+            "#F76707" if mes == mes_ref_cartera else "#E03131"
+            for mes in timeline["AñoMes"]
+        ]
+        fig_timeline = go.Figure()
+        fig_timeline.add_bar(x=timeline["AñoMes"], y=timeline["Altas"], name="Altas", marker_color=color_altas)
+        fig_timeline.add_bar(x=timeline["AñoMes"], y=-timeline["Bajas"], name="Bajas", marker_color=color_bajas)
+        fig_timeline.add_trace(go.Scatter(
+            x=timeline["AñoMes"], y=timeline["Neto"], name="Neto",
+            mode="lines+markers", line=dict(color=BRAND_COLORS["primary_dark"], width=2),
+        ))
+        fig_timeline.update_layout(
+            height=380,
+            barmode="relative",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            yaxis_title=cfg["timeline_yaxis"],
+            xaxis_title="",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=10, r=10, t=40, b=10),
+        )
+        st.plotly_chart(fig_timeline, use_container_width=True, config={"displayModeBar": False})
+        if mes_ref_cartera:
+            st.caption(
+                f"El mes resaltado ({month_to_spanish_label(mes_ref_cartera)}) corresponde al periodo de consumo seleccionado arriba."
+            )
+
+    if not timeline.empty:
+        meses_hist = timeline["AñoMes"].dropna().astype(str).tolist()
+        meses_hist = sorted(set(meses_hist))
+
+        idx_mes_hist = len(meses_hist) - 1
+        if mes_ref_cartera and mes_ref_cartera in meses_hist:
+            idx_mes_hist = meses_hist.index(mes_ref_cartera)
+
+        mes_historico = st.selectbox(
+            "Mes histórico",
+            options=meses_hist,
+            index=idx_mes_hist,
+            format_func=month_to_spanish_label,
+            key=cfg["mes_historico_key"],
+        )
+
+        bajas_mes_historico = ciclo_df[
+            ciclo_df["baja_valida"]
+            & (ciclo_df["fecha_baja_efectiva"].dt.strftime("%Y-%m") == mes_historico)
+        ]
+        altas_mes_historico = ciclo_df[
+            ciclo_df["fecha_pes_efectiva"].notna()
+            & (ciclo_df["fecha_pes_efectiva"].dt.strftime("%Y-%m") == mes_historico)
+        ]
+
+        col_bajas_det, col_altas_det = st.columns(2)
+        with col_bajas_det:
+            with st.expander(f"{cfg['expander_baja_title']} · {month_to_spanish_label(mes_historico)} ({len(bajas_mes_historico)})"):
+                if bajas_mes_historico.empty:
+                    st.caption(cfg["expander_baja_empty"])
+                else:
+                    st.dataframe(
+                        bajas_mes_historico[["razon_social", "zona", "fecha_baja_efectiva"]]
+                        .rename(columns={
+                            "razon_social": "Cliente",
+                            "zona": cfg["col_rename_label"],
+                            "fecha_baja_efectiva": "Fecha",
+                        })
+                        .sort_values("Fecha"),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
+                        },
+                    )
+        with col_altas_det:
+            with st.expander(f"{cfg['expander_alta_title']} · {month_to_spanish_label(mes_historico)} ({len(altas_mes_historico)})"):
+                if altas_mes_historico.empty:
+                    st.caption(cfg["expander_alta_empty"])
+                else:
+                    st.dataframe(
+                        altas_mes_historico[["razon_social", "zona", "fecha_pes_efectiva"]]
+                        .rename(columns={
+                            "razon_social": "Cliente",
+                            "zona": cfg["col_rename_label"],
+                            "fecha_pes_efectiva": "Fecha",
+                        })
+                        .sort_values("Fecha"),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
+                        },
+                    )
+
+    bajas_pendientes = int((~ciclo_df["baja_valida"] & ciclo_df["status_norm"].isin(cfg["pendientes_statuses"])).sum())
+    if bajas_pendientes:
+        st.caption(
+            f"⚠️ {bajas_pendientes} {cfg['pendientes_entity']} {cfg['pendientes_participio']} como "
+            f"{'/'.join(cfg['pendientes_statuses'])} no tienen fecha de {cfg['pendientes_fecha_label']} registrada "
+            "y no aparecen en la gráfica anterior. Conviene corregirlo en el sistema origen."
+        )
+
+    st.write("")
+    st.markdown(cfg["alert_heading"])
+    dias_alerta = 90
+
+    activos_df = ciclo_df[ciclo_df["status_norm"] == cfg["alert_status_value"]].copy()
+    hoy = pd.Timestamp(datetime.now().date())
+    activos_df["dias_restantes"] = (activos_df["vigencia"] - hoy).dt.days
+
+    # Solo alertar cuando la renovación NO es automática
+    es_no_automatica = (
+        activos_df["renovacion"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .eq("no automática")
+    )
+
+    alertas = activos_df[
+        activos_df["vigencia"].notna()
+        & (activos_df["dias_restantes"] >= 0)
+        & (activos_df["dias_restantes"] <= dias_alerta)
+        & es_no_automatica
+    ][["razon_social", "zona", "vigencia", "dias_restantes", "renovacion"]].sort_values("dias_restantes")
+
+    if alertas.empty:
+        st.success(cfg["alert_empty_msg"].format(dias=dias_alerta))
+    else:
+        st.warning(cfg["alert_found_msg"].format(n=len(alertas), dias=dias_alerta))
+
+        dias_minimos = int(alertas["dias_restantes"].min())
+        color_proximo = "#12B886"
+        if dias_minimos <= 7:
+            color_proximo = "#EF4444"
+        elif dias_minimos <= 30:
+            color_proximo = "#F59F00"
+
+        zona_top = "N/D"
+        zona_top_n = 0
+        if alertas["zona"].notna().any():
+            zona_counts = alertas["zona"].value_counts()
+            if not zona_counts.empty:
+                zona_top = str(zona_counts.index[0])
+                zona_top_n = int(zona_counts.iloc[0])
+
+        a1, a2, a3 = st.columns(3)
+        with a1:
+            render_mini_alert_card(
+                title=cfg["alert_kpi1_title"],
+                value=f"{len(alertas):,}",
+                subtitle=f"En los próximos {dias_alerta} días",
+                icon="⚠️",
+                color="#F59F00",
+            )
+        with a2:
+            render_mini_alert_card(
+                title="MÁS PRÓXIMO A VENCER",
+                value=f"{dias_minimos:,}",
+                subtitle="Días restantes",
+                icon="⏳",
+                color=color_proximo,
+            )
+        with a3:
+            render_mini_alert_card(
+                title=cfg["alert_kpi3_title"],
+                value=zona_top,
+                subtitle=f"{zona_top_n:,} {cfg['alert_kpi3_entity']} en riesgo",
+                icon="📍",
+                color="#0077CC",
+            )
+
+        st.write("")
+
+        alertas_det = alertas.copy()
+        alertas_det["riesgo_vencimiento"] = alertas_det["dias_restantes"].apply(_nivel_riesgo_vencimiento)
+        alertas_det = alertas_det.sort_values("dias_restantes", ascending=True)
+
+        st.dataframe(
+            alertas_det.rename(columns={
+                "razon_social": "Cliente",
+                "zona": cfg["col_rename_label"],
+                "vigencia": "Vigencia",
+                "dias_restantes": "Días restantes",
+                "renovacion": "Renovación",
+                "riesgo_vencimiento": "Riesgo de vencimiento",
+            }),
+            use_container_width=True,
+            hide_index=True,
+            height=min(400, 44 + 35 * len(alertas)),
+            column_config={
+                "Vigencia": st.column_config.DateColumn("Vigencia", format="DD/MM/YYYY"),
+                "Días restantes": st.column_config.NumberColumn("Días restantes", format="%d días"),
+                "Renovación": st.column_config.TextColumn("Renovación"),
+                "Riesgo de vencimiento": st.column_config.TextColumn("Riesgo de vencimiento"),
+            },
+        )
+
+
+# --- Configuración de la vista Cartera (fuente: resultado_todos_status) ---
+CARTERA_CONFIG = {
+    "subheader": "Salud de cartera y ciclo de vida de clientes",
+    "caption": (
+        "Esta sección siempre incluye todos los status (Activo, Inactivo, Cancelado, Pre Activo), "
+        "sin importar el filtro de status de la barra lateral."
+    ),
+    "data_loader": lambda: resultado_todos_status,
+    "spinner_msg": None,
+    "selector_label": "Zona para análisis de cartera",
+    "selector_placeholder": "Todas las zonas",
+    "selector_options_fn": lambda df: list(ZONAS.keys()),
+    "selector_key": "zona_cartera",
+    "filter_column": "zona",
+    "empty_base_msg": "No hay datos base para el análisis de status de clientes.",
+    "status_column": "status",
+    "status_normalizer": normalizar_status_serie,
+    "fecha_pes_col": "fecha_pes_efectiva",
+    "fecha_baja_col": "fecha_baja_efectiva",
+    "vigencia_col": "fecha_vigencia_actualizada",
+    "pct_suffix": "de la cartera",
+    "status_cards": [
+        {"status": "Activo", "title": "ACTIVOS", "icon": "🟢", "color": "#12B886"},
+        {"status": "Inactivo", "title": "INACTIVOS", "icon": "⚪", "color": "#6B7280"},
+        {"status": "Cancelado", "title": "CANCELADOS", "icon": "🔴", "color": "#E03131"},
+        {"status": "Pre Activo", "title": "PRE ACTIVO", "icon": "🟠", "color": "#F59F00"},
+    ],
+    "churn_label": "Tasa de churn del mes",
+    "activation_label": "Tasa de activación del mes",
+    "timeline_yaxis": "Clientes",
+    "timeline_empty_msg": "No hay fechas de alta/baja suficientes para construir la línea de tiempo.",
+    "mes_historico_key": "mes_historico_altas_bajas_gas",
+    "expander_baja_title": "Clientes dados de baja",
+    "expander_baja_empty": "Sin bajas en el mes histórico seleccionado.",
+    "expander_alta_title": "Clientes dados de alta",
+    "expander_alta_empty": "Sin altas en el mes histórico seleccionado.",
+    "col_rename_label": "Zona",
+    "pendientes_entity": "cliente(s)",
+    "pendientes_participio": "marcados",
+    "pendientes_fecha_label": "baja",
+    "pendientes_statuses": ["Inactivo", "Cancelado"],
+    "alert_heading": "**Alertas: vigencia próxima a vencer (solo clientes Activos)**",
+    "alert_status_value": "Activo",
+    "alert_empty_msg": "No hay clientes activos con vigencia venciendo en los próximos {dias} días.",
+    "alert_found_msg": "{n} cliente(s) activo(s) con vigencia venciendo en los próximos {dias} días.",
+    "alert_kpi1_title": "CLIENTES POR VENCER",
+    "alert_kpi3_title": "ZONA MÁS AFECTADA",
+    "alert_kpi3_entity": "cliente(s)",
+}
+
+# --- Configuración de la vista Garantías (fuente: cargar_datos_garantias) ---
+# Adaptaciones respecto a Cartera (mismo criterio de la versión previa):
+#   - "Zona" -> `ldc` (bv_hop_garantia no tiene zona geográfica ZONAS).
+#   - Alta/Baja -> `fecha_emision`/`fecha_devolucion`.
+#   - Vigencia contractual -> `fecha_vigencia`.
+#   - Solo 3 status reales (Vigente/Liberado/Vencido), sin equivalente de "Pre Activo".
+GARANTIAS_CONFIG = {
+    "subheader": "Salud de garantías y ciclo de vida de solicitudes",
+    "caption": (
+        "Esta sección utiliza la tabla de garantías (bv_hop_garantia) de forma "
+        "independiente y siempre incluye todos los status (Vigente, Liberado, Vencido), "
+        "sin importar el filtro de status de clientes de la barra lateral."
+    ),
+    "data_loader": cargar_datos_garantias,
+    "spinner_msg": "Consultando la base de datos...",
+    "selector_label": "LDC para análisis de garantías",
+    "selector_placeholder": "Todas las LDC",
+    "selector_options_fn": lambda df: sorted(
+        df["ldc"].dropna().astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
+    ),
+    "selector_key": "ldc_garantias",
+    "filter_column": "zona",
+    "empty_base_msg": "No hay datos base para el análisis de status de garantías.",
+    "status_column": "status_garantia",
+    "status_normalizer": normalizar_status_garantia_serie,
+    "fecha_pes_col": "fecha_emision",
+    "fecha_baja_col": "fecha_devolucion",
+    "vigencia_col": "fecha_vigencia",
+    "pct_suffix": "de las garantías",
+    "status_cards": [
+        {"status": "Vigente", "title": "VIGENTES", "icon": "🟢", "color": "#12B886"},
+        {"status": "Liberado", "title": "LIBERADAS", "icon": "⚪", "color": "#6B7280"},
+        {"status": "Vencido", "title": "VENCIDAS", "icon": "🔴", "color": "#E03131"},
+    ],
+    "churn_label": "Tasa de devolución del mes",
+    "activation_label": "Tasa de emisión del mes",
+    "timeline_yaxis": "Garantías",
+    "timeline_empty_msg": "No hay fechas de emisión/devolución suficientes para construir la línea de tiempo.",
+    "mes_historico_key": "mes_historico_altas_bajas_garantias",
+    "expander_baja_title": "Garantías devueltas",
+    "expander_baja_empty": "Sin devoluciones en el mes histórico seleccionado.",
+    "expander_alta_title": "Garantías emitidas",
+    "expander_alta_empty": "Sin emisiones en el mes histórico seleccionado.",
+    "col_rename_label": "LDC",
+    "pendientes_entity": "garantía(s)",
+    "pendientes_participio": "marcadas",
+    "pendientes_fecha_label": "devolución",
+    "pendientes_statuses": ["Liberado", "Vencido"],
+    "alert_heading": "**Alertas: vigencia próxima a vencer (solo garantías Vigentes)**",
+    "alert_status_value": "Vigente",
+    "alert_empty_msg": "No hay garantías vigentes con vencimiento en los próximos {dias} días.",
+    "alert_found_msg": "{n} garantía(s) vigente(s) con vencimiento en los próximos {dias} días.",
+    "alert_kpi1_title": "GARANTÍAS POR VENCER",
+    "alert_kpi3_title": "LDC MÁS AFECTADA",
+    "alert_kpi3_entity": "garantía(s)",
+}
+
 
 # ============================================================
 # SECCIÓN: MAPA
 # ============================================================
 if seccion == "🗺️  Mapa":
+    mostrar_intro_globo(VISTA_CENTRO[0], VISTA_CENTRO[1], zoom_destino=6.0)
+
     col_head_title, col_head_actions = st.columns([0.78, 0.22])
     with col_head_title:
         st.subheader("Mapa de zonas de Gas Natural")
 
-    df_geo_seccion = df_geo
+    df_geo_seccion = df_geo_pre_zona
 
     if not cols_consumo:
         st.info("No hay columnas de consumo para graficar.")
@@ -1909,7 +2708,7 @@ if seccion == "🗺️  Mapa":
         capas_activas = sum(1 for c in capas if st.session_state.get(f"kml_{c}", False))
 
         with col_head_actions:
-            with st.popover("⚙️ Filtro(s)", help="Abrir panel maestro de mapa", width='stretch'):
+            with st.popover("⚙️ Filtro(s)", help="Abrir panel maestro de mapa", use_container_width=True):
                 st.markdown("**Visualización**")
                 col_sel = st.selectbox(
                     "Consumo a visualizar",
@@ -1917,20 +2716,18 @@ if seccion == "🗺️  Mapa":
                     format_func=nombre_consumo,
                     key="col_sel_mapa",
                 )
-                st.selectbox("Zona", opciones_zona, key="zona_widget")
-                zona_sel = st.session_state.zona_widget
 
                 st.markdown("**Capas de infraestructura**")
                 st.caption(f"{capas_activas} de {len(capas)} activas")
 
                 col_accion_1, col_accion_2 = st.columns(2)
                 with col_accion_1:
-                    if st.button("Seleccionar todo", key="kml_todo", width='stretch'):
+                    if st.button("Seleccionar todo", key="kml_todo", use_container_width=True):
                         for capa in capas:
                             st.session_state[f"kml_{capa}"] = True
                         st.rerun()
                 with col_accion_2:
-                    if st.button("Deseleccionar todo", key="kml_nada", width='stretch'):
+                    if st.button("Deseleccionar todo", key="kml_nada", use_container_width=True):
                         for capa in capas:
                             st.session_state[f"kml_{capa}"] = False
                         st.rerun()
@@ -1964,7 +2761,7 @@ if seccion == "🗺️  Mapa":
                     label_visibility="collapsed",
                 )
             with col_cp_btn:
-                cp_submitted = st.form_submit_button("🔍 Buscar", width='stretch')
+                cp_submitted = st.form_submit_button("🔍 Buscar", use_container_width=True)
 
         # Al enviar el formulario: resolver coordenadas y guardar en session_state.
         if cp_submitted:
@@ -2011,12 +2808,12 @@ if seccion == "🗺️  Mapa":
                         df_cp[col_sel] = pd.to_numeric(df_cp[col_sel], errors='coerce').fillna(0)
                         df_cp = df_cp.rename(columns={
                             'id_instalacion': 'Instalación', 'bp': 'Cliente',
-                            'zona': 'Zona', col_sel: 'Consumo (GJ)'
+                            'zona': 'Zona', col_sel: f'Consumo GJ',
                         })
                         with col_cp_table:
                             st.dataframe(
-                                df_cp.sort_values('Consumo (GJ)', ascending=False),
-                                width='stretch',
+                                df_cp.sort_values('Consumo GJ', ascending=False),
+                                use_container_width=True,
                                 hide_index=True,
                                 height=min(180, 40 + 35 * len(df_cp)),
                             )
@@ -2027,7 +2824,7 @@ if seccion == "🗺️  Mapa":
 
         carpetas_sel = [c for c in capas if st.session_state.get(f"kml_{c}", False)]
 
-        if df_geo.empty:
+        if df_geo_pre_zona.empty:
             st.warning("No se pudieron obtener coordenadas de los códigos postales.")
         elif df_geo_seccion.empty:
             st.info("Ningún cliente coincide con el filtro de Id de Instalación en esta sección.")
@@ -2048,7 +2845,7 @@ if seccion == "🗺️  Mapa":
 
             map_data = st_folium(
                 m,
-                width='stretch',
+                use_container_width=True,
                 height=600,
                 key="mapa_zonas",
                 returned_objects=["last_object_clicked", "last_clicked"],
@@ -2118,16 +2915,34 @@ if seccion == "🗺️  Mapa":
 # SECCIÓN: REPORTES
 # ============================================================
 elif seccion == "📄  Reportes":
-    filtro_clientes = st.text_input("Filtrar por Id de Instalación", key="filtro_instalacion_clientes")
+    filtro_clientes = st.text_input(
+        "Filtrar por Id de Instalación",
+        key="filtro_instalacion_clientes",
+        placeholder="Ej: 600601101",
+    )
     df_mostrar_seccion = df_mostrar
     if filtro_clientes:
         df_mostrar_seccion = df_mostrar[
             df_mostrar['id_instalacion'].astype(str).str.contains(filtro_clientes, case=False, na=False)
         ]
 
-    # base_reporte siempre usa el conjunto completo; el filtro de id se aplica
-    # solo en la visualización para no distorsionar cálculos (% zona, spreads, etc.)
-    base_reporte = df_geo if not df_geo.empty else df_mostrar_seccion
+    # Reportes usa el dataset de negocio (df_mostrar) para no depender de la
+    # geocodificación (df_geo). Asi, el filtro de zona funciona incluso cuando
+    # una zona tiene pocos/sin puntos geocodificados.
+    base_reporte = df_mostrar_seccion.copy()
+
+    # Mantener comportamiento del filtro global de volumen tambien en Reportes.
+    if min_gj_global > 0 and 'Consumo_Total_Periodo_GJ' in base_reporte.columns:
+        base_reporte = base_reporte[
+            pd.to_numeric(base_reporte['Consumo_Total_Periodo_GJ'], errors='coerce').fillna(0) >= min_gj_global
+        ].copy()
+
+    # Aplicar filtro global de zona sobre zona_vpm (fuente canonica en reportes).
+    if zona_sel_global != "Vista general" and not base_reporte.empty:
+        col_zona_reporte = 'zona_vpm' if 'zona_vpm' in base_reporte.columns else ('zona' if 'zona' in base_reporte.columns else None)
+        if col_zona_reporte is not None:
+            zonas_reporte_norm = normalizar_zona_clave_serie(base_reporte[col_zona_reporte])
+            base_reporte = base_reporte[zonas_reporte_norm == zona_sel_global_norm].copy()
 
     if base_reporte.empty:
         st.subheader("📄 Generador de reportes personalizados")
@@ -2185,15 +3000,8 @@ elif seccion == "📄  Reportes":
                 'fecha_vigencia_actualizada', 'fecha_pes_efectiva', 'fecha_baja_efectiva',
             ] if c in base_reporte.columns
         ]
-        zonas_disponibles = (
-            sorted(base_reporte['zona'].dropna().astype(str).unique().tolist())
-            if 'zona' in base_reporte.columns else []
-        )
-
         if "reporte_col_fecha" not in st.session_state:
             st.session_state["reporte_col_fecha"] = "(sin filtro)"
-        if "reporte_zonas_sel" not in st.session_state:
-            st.session_state["reporte_zonas_sel"] = []
         if "mostrar_manage_columns" not in st.session_state:
             st.session_state["mostrar_manage_columns"] = False
 
@@ -2203,14 +3011,9 @@ elif seccion == "📄  Reportes":
             col_fecha_sel = "(sin filtro)"
             st.session_state["reporte_col_fecha"] = col_fecha_sel
 
-        zonas_sel = st.session_state.get("reporte_zonas_sel", [])
-        if not isinstance(zonas_sel, list):
-            zonas_sel = []
-        zonas_sel = [z for z in zonas_sel if z in zonas_disponibles]
-        st.session_state["reporte_zonas_sel"] = zonas_sel
-
         fecha_ini_rep = fecha_fin_rep = None
         f_min = f_max = None
+        serie_fecha = None
         if col_fecha_sel != "(sin filtro)":
             serie_fecha = pd.to_datetime(base_reporte[col_fecha_sel], errors='coerce')
             serie_fecha_valida = serie_fecha[serie_fecha.notna() & (serie_fecha.dt.year != 9999)]
@@ -2240,12 +3043,11 @@ elif seccion == "📄  Reportes":
             fi, ff = fecha_ini_rep, fecha_fin_rep
             if fi > ff:
                 fi, ff = ff, fi
-            serie = pd.to_datetime(df_reporte[col_fecha_sel], errors='coerce')
+            # Reutiliza `serie_fecha` (ya calculado arriba para f_min/f_max)
+            # en vez de volver a parsear la misma columna con pd.to_datetime.
+            serie = serie_fecha if serie_fecha is not None else pd.to_datetime(df_reporte[col_fecha_sel], errors='coerce')
             mascara = serie.notna() & (serie.dt.date >= fi) & (serie.dt.date <= ff)
             df_reporte = df_reporte[mascara]
-
-        if zonas_sel:
-            df_reporte = df_reporte[df_reporte['zona'].astype(str).isin(zonas_sel)]
 
         # % cliente por Zona = Consumo_Total_Periodo_GJ del cliente / suma de
         # Consumo_Total_Periodo_GJ de su zona (zona_vpm), sobre los datos ya
@@ -2294,7 +3096,7 @@ elif seccion == "📄  Reportes":
         with col_acciones:
             col_btn_manage, col_btn_export = st.columns(2)
             with col_btn_manage:
-                if st.button("🛠️ Manage Columns", key="btn_manage_columns", width='stretch'):
+                if st.button("🛠️ Manage Columns", key="btn_manage_columns", use_container_width=True):
                     for c in columnas_disponibles:
                         st.session_state.pop(f"gestion_col_chk_{c}", None)
                     st.session_state["gestion_columnas_draft"] = list(columnas_orden)
@@ -2310,12 +3112,12 @@ elif seccion == "📄  Reportes":
                         "reporte_personalizado.xlsx",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="dl_excel_reporte_header",
-                        width='stretch',
+                        use_container_width=True,
                     )
                     if export_clicked:
                         st.session_state["mostrar_manage_columns"] = False
                 else:
-                    st.button("Export", key="btn_export_disabled_header", disabled=True, width='stretch')
+                    st.button("Export", key="btn_export_disabled_header", disabled=True, use_container_width=True)
 
             if st.session_state.get("mostrar_manage_columns"):
                 _dialog_manage_columns(columnas_disponibles, columnas_default)
@@ -2338,52 +3140,40 @@ elif seccion == "📄  Reportes":
                 )
             st.dataframe(
                 df_reporte_final,
-                width='stretch',
+                use_container_width=True,
                 hide_index=True,
                 column_config=column_config_reporte,
             )
 
             st.markdown("**Filtros del reporte**")
-            f_col1, f_col2 = st.columns(2)
-
-            with f_col1:
-                if columnas_fecha:
-                    st.selectbox(
-                        "Filtrar por rango de fechas usando",
-                        options=opciones_fecha,
-                        key="reporte_col_fecha",
-                    )
-                    col_fecha_ui = st.session_state.get("reporte_col_fecha", "(sin filtro)")
-                    if col_fecha_ui != "(sin filtro)":
-                        serie_fecha_ui = pd.to_datetime(base_reporte[col_fecha_ui], errors='coerce')
-                        serie_fecha_valida_ui = serie_fecha_ui[
-                            serie_fecha_ui.notna() & (serie_fecha_ui.dt.year != 9999)
-                        ]
-                        if not serie_fecha_valida_ui.empty:
-                            f_min_ui = serie_fecha_valida_ui.min().date()
-                            f_max_ui = serie_fecha_valida_ui.max().date()
-                            rango_default_ui = st.session_state.get("reporte_rango_fecha", (f_min_ui, f_max_ui))
-                            st.date_input(
-                                "Rango de fechas (inicial y final)",
-                                value=rango_default_ui,
-                                min_value=f_min_ui,
-                                max_value=f_max_ui,
-                                format="DD/MM/YYYY",
-                                key="reporte_rango_fecha",
-                            )
-                        else:
-                            st.caption("No hay fechas válidas en esta columna.")
-                else:
-                    st.caption("No hay columnas de fecha disponibles para filtrar.")
-
-            with f_col2:
-                st.multiselect(
-                    "Filtrar por zona",
-                    options=zonas_disponibles,
-                    default=zonas_sel,
-                    key="reporte_zonas_sel",
-                    help="Sin selección se incluyen todas las zonas.",
+            if columnas_fecha:
+                st.selectbox(
+                    "Filtrar por rango de fechas usando",
+                    options=opciones_fecha,
+                    key="reporte_col_fecha",
                 )
+                col_fecha_ui = st.session_state.get("reporte_col_fecha", "(sin filtro)")
+                if col_fecha_ui != "(sin filtro)":
+                    serie_fecha_ui = pd.to_datetime(base_reporte[col_fecha_ui], errors='coerce')
+                    serie_fecha_valida_ui = serie_fecha_ui[
+                        serie_fecha_ui.notna() & (serie_fecha_ui.dt.year != 9999)
+                    ]
+                    if not serie_fecha_valida_ui.empty:
+                        f_min_ui = serie_fecha_valida_ui.min().date()
+                        f_max_ui = serie_fecha_valida_ui.max().date()
+                        rango_default_ui = st.session_state.get("reporte_rango_fecha", (f_min_ui, f_max_ui))
+                        st.date_input(
+                            "Rango de fechas (inicial y final)",
+                            value=rango_default_ui,
+                            min_value=f_min_ui,
+                            max_value=f_max_ui,
+                            format="DD/MM/YYYY",
+                            key="reporte_rango_fecha",
+                        )
+                    else:
+                        st.caption("No hay fechas válidas en esta columna.")
+            else:
+                st.caption("No hay columnas de fecha disponibles para filtrar.")
 
             st.markdown("**Resumen por zona**")
             if 'zona_vpm' not in df_reporte.columns or 'Consumo_Total_Periodo_GJ' not in df_reporte.columns:
@@ -2412,7 +3202,7 @@ elif seccion == "📄  Reportes":
                         'spread_ponderado': 'sum',
                     })
                     .rename(columns={'zona_vpm': 'Zona'})
-                    .sort_values('Consumo_Total_Periodo_GJ', ascending=False)  # corregido: era 'Consumo'
+                    .sort_values('Consumo_Total_Periodo_GJ', ascending=False)
                 )
 
                 total_consumo_zonas = float(resumen_zona['Consumo_Total_Periodo_GJ'].sum())
@@ -2428,7 +3218,7 @@ elif seccion == "📄  Reportes":
 
                 st.dataframe(
                     resumen_zona,
-                    width='stretch',
+                    use_container_width=True,
                     hide_index=True,
                     column_config={
                         'Consumo_Total_Periodo_GJ': st.column_config.NumberColumn(
@@ -2538,7 +3328,11 @@ elif seccion == "📄  Reportes":
 elif seccion == "📊  Dashboard":
     st.subheader("Top 10 consumidores por periodo")
 
-    filtro_top10 = st.text_input("Filtrar por Id de Instalación", key="filtro_instalacion_top10")
+    filtro_top10 = st.text_input(
+        "Filtrar por Id de Instalación",
+        key="filtro_instalacion_top10",
+        placeholder="Ej: 600601101",
+    )
     df_geo_top10 = df_geo
     if filtro_top10 and not df_geo.empty:
         df_geo_top10 = df_geo[
@@ -2546,41 +3340,16 @@ elif seccion == "📊  Dashboard":
         ]
 
     if cols_consumo and not df_geo_top10.empty:
-        # ---- Filtro de zona estilo tarjeta ENGIE ----
-        st.markdown(
-            """
-            <style>
-            div[data-testid="stSelectbox"][id*="zona_top"] label {
-                font-size: 0.72rem;
-                font-weight: 700;
-                letter-spacing: 0.6px;
-                text-transform: uppercase;
-                color: #003C88;
-            }
-            div[data-testid="stSelectbox"][id*="zona_top"] div[data-baseweb="select"] > div {
-                border-radius: 14px !important;
-                border: 1.5px solid #D7E4F3 !important;
-                background: #FFFFFF;
-                box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-                font-weight: 600;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        zona_top = st.selectbox(
-            "Filtrar Top 10 por zona",
-            ["Todas"] + list(ZONAS.keys()),
-            key="zona_top"
-        )
-
-        base_top = df_geo_top10 if zona_top == "Todas" else df_geo_top10[df_geo_top10['zona'] == zona_top]
+        # El filtro de zona ya se aplicó de forma global (sidebar) sobre df_geo,
+        # por lo que aquí solo se usa directamente.
+        base_top = df_geo_top10
 
         subtabs = st.tabs([nombre_consumo(c) for c in cols_consumo])
 
-        zona_txt = f"en {zona_top}" if zona_top != "Todas" else "a nivel nacional"
+        zona_sel_global_top10 = st.session_state.get("zona_widget", "Vista general")
+        zona_txt = f"en {zona_sel_global_top10}" if zona_sel_global_top10 != "Vista general" else "a nivel nacional"
 
-        # Paleta ENGIE de 10 colores (del más oscuro al más claro)
+        # Paleta ENGIE de 10 colores (del mas oscuro al mas claro)
         ENGIE_TOP10_COLORS = [
             "#002B49", "#003C88", "#005C9A", "#0077CC",
             "#278CBC", "#7FA8D8", "#A8C8EE", "#BDD9F5",
@@ -2610,6 +3379,7 @@ elif seccion == "📊  Dashboard":
 
                     col_prev = col_periodo_anterior(col, base_top.columns)
                     rank_prev_map = {}
+                    top_prev10_set = set()
                     if col_prev:
                         ranking_prev = (
                             base_top[['razon_social', col_prev]]
@@ -2619,21 +3389,26 @@ elif seccion == "📊  Dashboard":
                             .sort_values(ascending=False)
                         )
                         rank_prev_map = {nombre: i + 1 for i, nombre in enumerate(ranking_prev.index)}
+                        top_prev10_set = set(ranking_prev.head(10).index.tolist())
 
-                    nuevos_en_top = (
-                        sum(1 for n in top['razon_social'] if n not in rank_prev_map)
-                        if rank_prev_map else 0
-                    )
+                    top_actual_set = set(top['razon_social'].dropna().tolist())
+                    entradas_top10 = sorted(top_actual_set - top_prev10_set)
+                    salidas_top10 = sorted(top_prev10_set - top_actual_set)
+                    repiten_top10 = sorted(top_actual_set & top_prev10_set)
+                    base_rotacion = len(top_actual_set) if top_actual_set else 10
+                    rotacion_top10 = (len(entradas_top10) / base_rotacion) if top_prev10_set else 0
+                    persistencia_top10 = (len(repiten_top10) / base_rotacion) if top_prev10_set else 0
 
-                    if rank_prev_map and nuevos_en_top:
+                    if top_prev10_set:
                         st.caption(
-                            f"🆕 {nuevos_en_top} cliente(s) nuevo(s) en el Top 10 respecto al mes anterior "
-                            f"({etiqueta_periodo(col_prev)})."
+                            f"🔄 Rotación vs {etiqueta_periodo(col_prev)}: "
+                            f"{len(entradas_top10)} entrada(s), {len(salidas_top10)} salida(s), "
+                            f"{len(repiten_top10)} cliente(s) que se mantienen."
                         )
-                    elif not rank_prev_map:
+                    else:
                         st.caption("No hay un mes anterior disponible para comparar tendencia.")
 
-                    k1, k2, k3 = st.columns(3)
+                    k1, k2, k3, k4 = st.columns(4)
                     with k1:
                         render_mini_alert_card(
                             "LÍDER DEL PERIODO", f"{lider[col]:,.0f} GJ",
@@ -2646,11 +3421,24 @@ elif seccion == "📊  Dashboard":
                         )
                     with k3:
                         render_mini_alert_card(
-                            "NUEVOS EN EL TOP 10",
-                            f"{nuevos_en_top}" if rank_prev_map else "N/D",
-                            subtitle="vs. mes anterior" if rank_prev_map else "Sin mes anterior disponible",
+                            "ENTRADAS AL TOP 10",
+                            f"{len(entradas_top10)}" if top_prev10_set else "N/D",
+                            subtitle=f"Rotación {rotacion_top10:.0%}" if top_prev10_set else "Sin mes anterior disponible",
                             icon="🆕", color="#F59F00",
                         )
+                    with k4:
+                        render_mini_alert_card(
+                            "SALIDAS DEL TOP 10",
+                            f"{len(salidas_top10)}" if top_prev10_set else "N/D",
+                            subtitle=f"Persistencia {persistencia_top10:.0%}" if top_prev10_set else "Sin mes anterior disponible",
+                            icon="📤", color="#E03131",
+                        )
+
+                    if top_prev10_set:
+                        ent_txt = ", ".join(entradas_top10) if entradas_top10 else "Sin entradas"
+                        sal_txt = ", ".join(salidas_top10) if salidas_top10 else "Sin salidas"
+                        st.caption(f"Entran: {ent_txt}")
+                        st.caption(f"Salen: {sal_txt}")
 
                     st.write("")
 
@@ -2673,10 +3461,10 @@ elif seccion == "📊  Dashboard":
                             return "➖ Igual"
                         top_fmt['Tendencia'] = top_fmt.apply(_tendencia, axis=1)
 
-                    # ---- Gráfico de barras horizontal, mayor a menor, paleta ENGIE ----
-                    top_chart = top_fmt.sort_values('Consumo (GJ)', ascending=True)  # ascending=True para que el mayor quede arriba en horizontal
+                    # ---- Grafico de barras horizontal, mayor a menor, paleta ENGIE ----
+                    top_chart = top_fmt.sort_values('Consumo (GJ)', ascending=True)
                     n_bars = len(top_chart)
-                    bar_colors = ENGIE_TOP10_COLORS[:n_bars][::-1]  # más oscuro para el mayor
+                    bar_colors = ENGIE_TOP10_COLORS[:n_bars][::-1]
 
                     fig_top10 = go.Figure(go.Bar(
                         x=top_chart['Consumo (GJ)'],
@@ -2704,16 +3492,16 @@ elif seccion == "📊  Dashboard":
                         plot_bgcolor='rgba(0,0,0,0)',
                         paper_bgcolor='rgba(0,0,0,0)',
                     )
-                    st.plotly_chart(fig_top10, width='stretch', config={"displayModeBar": False})
+                    st.plotly_chart(fig_top10, use_container_width=True, config={"displayModeBar": False})
 
                     st.dataframe(
                         top_fmt.style.format({'Consumo (GJ)': '{:,.0f}'}),
-                        width='stretch',
+                        use_container_width=True,
                         hide_index=True,
-                    
                     )
-                                        # ============================================================
-                    # ANÁLISIS (KPIs + evolución + zonas)
+
+                    # ============================================================
+                    # ANALISIS (KPIs + evolucion + zonas)
                     # ============================================================
                     st.markdown("---")
                     st.markdown("### Análisis")
@@ -2724,7 +3512,7 @@ elif seccion == "📊  Dashboard":
                     ).fillna(0)
                     ids_an = set(df_an['id_instalacion'].dropna().unique())
 
-                    # ---- Serie mensual de volumen (histórico) ----
+                    # ---- Serie mensual de volumen (historico) ----
                     base_mensual = consumo_diario[consumo_diario['id_instalacion'].isin(ids_an)].copy()
                     base_mensual['AñoMes'] = base_mensual['fecha'].dt.to_period('M')
                     serie_mensual = base_mensual.groupby('AñoMes')['consumo_gj'].sum().sort_index()
@@ -2808,7 +3596,7 @@ elif seccion == "📊  Dashboard":
                             plot_bgcolor='rgba(0,0,0,0)',
                             paper_bgcolor='rgba(0,0,0,0)',
                         )
-                        st.plotly_chart(fig_evol, width='stretch',
+                        st.plotly_chart(fig_evol, use_container_width=True,
                                         config={"displayModeBar": False},
                                         key=f"evol_{col}")
 
@@ -2840,7 +3628,7 @@ elif seccion == "📊  Dashboard":
                                 legend=dict(orientation="v", x=1.0, y=0.5),
                                 paper_bgcolor='rgba(0,0,0,0)',
                             )
-                            st.plotly_chart(fig_donut, width='stretch',
+                            st.plotly_chart(fig_donut, use_container_width=True,
                                             config={"displayModeBar": False},
                                             key=f"donut_{col}")
 
@@ -2874,13 +3662,13 @@ elif seccion == "📊  Dashboard":
                                 plot_bgcolor='rgba(0,0,0,0)',
                                 paper_bgcolor='rgba(0,0,0,0)',
                             )
-                            st.plotly_chart(fig_cli, width='stretch',
+                            st.plotly_chart(fig_cli, use_container_width=True,
                                             config={"displayModeBar": False},
                                             key=f"barzona_{col}")
 
                     st.markdown("---")
 
-                    # ----- Tendencia diaria de consumo (detalle día a día) -----
+                    # ----- Tendencia diaria de consumo (detalle dia a dia) -----
                     ids_grupo = base_top['id_instalacion'].dropna().unique().tolist()
                     mask_fecha = pd.Series(True, index=consumo_diario.index)
                     if col == 'Consumo_Total_Periodo_GJ':
@@ -2916,7 +3704,7 @@ elif seccion == "📊  Dashboard":
                             .rename('Consumo (GJ)')
                             .sort_index()
                         )
-                        st.caption(f"Consumo diario total {zona_txt} — {nombre_consumo(col)}")
+                        st.caption(f"Consumo diario total {zona_txt} - {nombre_consumo(col)}")
                         st.line_chart(tendencia_total, color="#007BC5")
 
                         top_ids = (
@@ -2934,7 +3722,6 @@ elif seccion == "📊  Dashboard":
                             )
                             st.caption("Tendencia diaria de los 5 clientes líderes del periodo")
                             st.line_chart(tendencia_clientes)
-
     elif cols_consumo and df_geo.empty:
         st.info("No hay coordenadas para calcular el Top 10 por zona.")
     elif cols_consumo:
@@ -2944,314 +3731,22 @@ elif seccion == "📊  Dashboard":
 
 
 # ============================================================
-# SECCIÓN: CARTERA
+# SECCIÓN: GESTIÓN COMERCIAL (vista unificada)
 # ============================================================
-elif seccion == "👛  Cartera":
-    st.subheader("Salud de cartera y ciclo de vida de clientes")
-    st.caption(
-        "Esta sección siempre incluye todos los status (Activo, Inactivo, Cancelado, Pre Activo), "
-        "sin importar el filtro de status de la barra lateral."
-    )
-
-    zona_cartera = st.selectbox(
-        "Zona para análisis de cartera",
-        ["Todas las zonas"] + list(ZONAS.keys()),
-        key="zona_cartera",
-    )
-
-    if zona_cartera != "Todas las zonas":
-        ciclo_base = resultado_todos_status[resultado_todos_status["zona"] == zona_cartera].copy()
-    else:
-        ciclo_base = resultado_todos_status.copy()
-
-    if ciclo_base.empty:
-        st.info("No hay datos base para el análisis de status de clientes.")
-    else:
-        ciclo_df = ciclo_base.copy()
-        ciclo_df["status_norm"] = ciclo_df["status"].apply(normalizar_status)
-        ciclo_df["fecha_pes_efectiva"] = pd.to_datetime(ciclo_df["fecha_pes_efectiva"], errors="coerce")
-        ciclo_df["fecha_baja_efectiva"] = pd.to_datetime(ciclo_df["fecha_baja_efectiva"], errors="coerce")
-        ciclo_df["vigencia"] = pd.to_datetime(ciclo_df["fecha_vigencia_actualizada"], errors="coerce")
-        ciclo_df["baja_valida"] = ciclo_df["fecha_baja_efectiva"].apply(fecha_baja_es_valida)
-
-        total_ciclo = len(ciclo_df)
-        conteo_status = ciclo_df["status_norm"].value_counts()
-
-        activos_n = int(conteo_status.get("Activo", 0))
-        inactivos_n = int(conteo_status.get("Inactivo", 0))
-        cancelados_n = int(conteo_status.get("Cancelado", 0))
-        preactivos_n = int(conteo_status.get("Pre Activo", 0))
-        sin_status_n = int(conteo_status.get("Sin status", 0))
-
-        def _pct(n):
-            return f"{n / total_ciclo:.1%} de la cartera" if total_ciclo else None
-
-        k1, k2, k3 = st.columns(3)
-        with k1:
-            render_mini_alert_card(
-                "ACTIVOS",
-                value=f"{activos_n:,}",
-                subtitle=_pct(activos_n) or "Sin datos",
-                icon="🟢",
-                color="#12B886",
-            )
-        with k2:
-            render_mini_alert_card(
-                "INACTIVOS",
-                value=f"{inactivos_n:,}",
-                subtitle=_pct(inactivos_n) or "Sin datos",
-                icon="⚪",
-                color="#6B7280",
-            )
-        with k3:
-            render_mini_alert_card(
-                "CANCELADOS",
-                value=f"{cancelados_n:,}",
-                subtitle=_pct(cancelados_n) or "Sin datos",
-                icon="🔴",
-                color="#E03131",
-            )
-
-        st.write("")
-
-        if mes_ref_cartera:
-            bajas_mes = ciclo_df[
-                ciclo_df["baja_valida"] & (ciclo_df["fecha_baja_efectiva"].dt.strftime("%Y-%m") == mes_ref_cartera)
-            ]
-            altas_mes = ciclo_df[
-                ciclo_df["fecha_pes_efectiva"].notna() & (ciclo_df["fecha_pes_efectiva"].dt.strftime("%Y-%m") == mes_ref_cartera)
-            ]
-            base_para_churn = activos_n + inactivos_n + cancelados_n
-            tasa_churn = (len(bajas_mes) / base_para_churn) if base_para_churn else 0
-            tasa_activacion = (len(altas_mes) / total_ciclo) if total_ciclo else 0
-
-            kc_a, kc_b = st.columns(2)
-            with kc_a:
-                render_kpi_card(
-                    title=f"BAJAS · {month_to_spanish_label(mes_ref_cartera).upper()}",
-                    value=f"{len(bajas_mes):,}",
-                    subtitle=f"Tasa de churn del mes: {tasa_churn:.2%}",
-                    icon="📉",
-                    accent_color="#E03131",
-                )
-            with kc_b:
-                render_kpi_card(
-                    title=f"ALTAS · {month_to_spanish_label(mes_ref_cartera).upper()}",
-                    value=f"{len(altas_mes):,}",
-                    subtitle=f"Tasa de activación del mes: {tasa_activacion:.2%}",
-                    icon="📈",
-                    accent_color="#0077CC",
-                )
-        else:
-            st.info("No hay referencia de mes para calcular altas y bajas del periodo filtrado.")
-
-        st.write("")
-        st.markdown("**Altas y bajas por mes (histórico)**")
-
-        altas_serie = (
-            ciclo_df[ciclo_df["fecha_pes_efectiva"].notna()]
-            .assign(AñoMes=lambda d: d["fecha_pes_efectiva"].dt.to_period("M").astype(str))
-            .groupby("AñoMes").size().rename("Altas")
-        )
-        bajas_serie = (
-            ciclo_df[ciclo_df["baja_valida"]]
-            .assign(AñoMes=lambda d: d["fecha_baja_efectiva"].dt.to_period("M").astype(str))
-            .groupby("AñoMes").size().rename("Bajas")
+elif seccion == "💼  Gestión Comercial":
+    # Selector Clientes/Garantías arriba a la derecha de la sección. El valor
+    # elegido se persiste en st.session_state["vista_cartera_garantias"] y
+    # determina qué configuración (dataset + etiquetas) se le pasa a la
+    # función reutilizable render_salud_ciclo_vida (layout/lógica idénticos).
+    col_espacio, col_selector = st.columns([4.9, 1.1])
+    with col_selector:
+        vista_cartera_garantias = st.segmented_control(
+            "Vista",
+            options=["Clientes", "Garantías"],
+            default="Clientes",
+            key="vista_cartera_garantias",
+            label_visibility="collapsed",
         )
 
-
-
-
-
-        timeline = pd.concat([altas_serie, bajas_serie], axis=1).fillna(0).sort_index().reset_index()
-        timeline = timeline.rename(columns={"index": "AñoMes"})
-       
-        timeline["Altas"] = timeline["Altas"].astype(int)
-        timeline["Bajas"] = timeline["Bajas"].astype(int)
-        timeline["Neto"] = timeline["Altas"] - timeline["Bajas"]
-
-        if timeline.empty:
-            st.info("No hay fechas de alta/baja suficientes para construir la línea de tiempo.")
-        else:
-            color_altas = [
-                BRAND_COLORS["accent"] if mes == mes_ref_cartera else BRAND_COLORS["primary"]
-                for mes in timeline["AñoMes"]
-            ]
-            color_bajas = [
-                "#F76707" if mes == mes_ref_cartera else "#E03131"
-                for mes in timeline["AñoMes"]
-            ]
-            fig_timeline = go.Figure()
-            fig_timeline.add_bar(x=timeline["AñoMes"], y=timeline["Altas"], name="Altas", marker_color=color_altas)
-            fig_timeline.add_bar(x=timeline["AñoMes"], y=-timeline["Bajas"], name="Bajas", marker_color=color_bajas)
-            fig_timeline.add_trace(go.Scatter(
-                x=timeline["AñoMes"], y=timeline["Neto"], name="Neto",
-                mode="lines+markers", line=dict(color=BRAND_COLORS["primary_dark"], width=2),
-            ))
-            fig_timeline.update_layout(
-                height=380,
-                barmode="relative",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                yaxis_title="Clientes",
-                xaxis_title="",
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                margin=dict(l=10, r=10, t=40, b=10),
-            )
-            st.plotly_chart(fig_timeline, width='stretch', config={"displayModeBar": False})
-            if mes_ref_cartera:
-                st.caption(
-                    f"El mes resaltado ({month_to_spanish_label(mes_ref_cartera)}) corresponde al periodo de consumo seleccionado arriba."
-                )
-
-        if not timeline.empty:
-            meses_hist = timeline["AñoMes"].dropna().astype(str).tolist()
-            meses_hist = sorted(set(meses_hist))
-
-            idx_mes_hist = len(meses_hist) - 1
-            if mes_ref_cartera and mes_ref_cartera in meses_hist:
-                idx_mes_hist = meses_hist.index(mes_ref_cartera)
-
-            mes_historico = st.selectbox(
-                "Mes histórico",
-                options=meses_hist,
-                index=idx_mes_hist,
-                format_func=month_to_spanish_label,
-                key="mes_historico_altas_bajas_gas",
-            )
-
-            bajas_mes_historico = ciclo_df[
-                ciclo_df["baja_valida"]
-                & (ciclo_df["fecha_baja_efectiva"].dt.strftime("%Y-%m") == mes_historico)
-            ]
-            altas_mes_historico = ciclo_df[
-                ciclo_df["fecha_pes_efectiva"].notna()
-                & (ciclo_df["fecha_pes_efectiva"].dt.strftime("%Y-%m") == mes_historico)
-            ]
-
-            col_bajas_det, col_altas_det = st.columns(2)
-            with col_bajas_det:
-                with st.expander(f"Clientes dados de baja · {month_to_spanish_label(mes_historico)} ({len(bajas_mes_historico)})"):
-                    if bajas_mes_historico.empty:
-                        st.caption("Sin bajas en el mes histórico seleccionado.")
-                    else:
-                        st.dataframe(
-                            bajas_mes_historico[["razon_social", "zona", "fecha_baja_efectiva"]]
-                            .rename(columns={"razon_social": "Cliente", "zona": "Zona", "fecha_baja_efectiva": "Fecha"})
-                            .sort_values("Fecha"),
-                            width='stretch',
-                            hide_index=True,
-                            column_config={"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY")},
-                        )
-            with col_altas_det:
-                with st.expander(f"Clientes dados de alta · {month_to_spanish_label(mes_historico)} ({len(altas_mes_historico)})"):
-                    if altas_mes_historico.empty:
-                        st.caption("Sin altas en el mes histórico seleccionado.")
-                    else:
-                        st.dataframe(
-                            altas_mes_historico[["razon_social", "zona", "fecha_pes_efectiva"]]
-                            .rename(columns={"razon_social": "Cliente", "zona": "Zona", "fecha_pes_efectiva": "Fecha"})
-                            .sort_values("Fecha"),
-                            width='stretch',
-                            hide_index=True,
-                            column_config={"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY")},
-                        )
-
-        bajas_pendientes = int((~ciclo_df["baja_valida"] & ciclo_df["status_norm"].isin(["Inactivo", "Cancelado"])).sum())
-        if bajas_pendientes:
-            st.caption(
-                f"⚠️ {bajas_pendientes} cliente(s) marcados como Inactivo/Cancelado no tienen fecha de baja registrada "
-                "y no aparecen en la gráfica anterior. Conviene corregirlo en el sistema origen."
-            )
-
-        st.write("")
-        st.markdown("**Alertas: vigencia próxima a vencer (solo clientes Activos)**")
-        dias_alerta = 90
-
-        activos_df = ciclo_df[ciclo_df["status_norm"] == "Activo"].copy()
-        hoy = pd.Timestamp(datetime.now().date())
-        activos_df["dias_restantes"] = (activos_df["vigencia"] - hoy).dt.days
-
-        es_no_automatica = (
-            activos_df["renovacion"].astype(str).str.strip().str.lower().eq("no automática")
-        )
-
-        alertas = activos_df[
-            activos_df["vigencia"].notna()
-            & (activos_df["dias_restantes"] >= 0)
-            & (activos_df["dias_restantes"] <= dias_alerta)
-            & es_no_automatica
-        ][["razon_social", "zona", "vigencia", "dias_restantes", "renovacion"]].sort_values("dias_restantes")
-
-        if alertas.empty:
-            st.success(f"No hay clientes activos con vigencia venciendo en los próximos {dias_alerta} días.")
-        else:
-            st.warning(f"{len(alertas)} cliente(s) activo(s) con vigencia venciendo en los próximos {dias_alerta} días.")
-
-            dias_minimos = int(alertas["dias_restantes"].min())
-            color_proximo = "#12B886"
-            if dias_minimos <= 7:
-                color_proximo = "#EF4444"
-            elif dias_minimos <= 30:
-                color_proximo = "#F59F00"
-
-            zona_top = "N/D"
-            zona_top_n = 0
-            if alertas["zona"].notna().any():
-                zona_counts = alertas["zona"].value_counts()
-                if not zona_counts.empty:
-                    zona_top = str(zona_counts.index[0])
-                    zona_top_n = int(zona_counts.iloc[0])
-
-            k1, k2, k3 = st.columns(3)
-            with k1:
-                render_mini_alert_card(
-                    title="CLIENTES POR VENCER", value=f"{len(alertas):,}",
-                    subtitle=f"En los próximos {dias_alerta} días", icon="⚠️", color="#F59F00",
-                )
-            with k2:
-                render_mini_alert_card(
-                    title="MÁS PRÓXIMO A VENCER", value=f"{dias_minimos:,}",
-                    subtitle="Días restantes", icon="⏳", color=color_proximo,
-                )
-            with k3:
-                render_mini_alert_card(
-                    title="ZONA MÁS AFECTADA", value=zona_top,
-                    subtitle=f"{zona_top_n:,} cliente(s) en riesgo", icon="📍", color="#0077CC",
-                )
-
-            st.write("")
-
-            alertas_det = alertas.copy()
-
-            def _nivel_riesgo(dias):
-                if pd.isna(dias):
-                    return "N/D"
-                dias = int(dias)
-                if dias <= 7:
-                    return "🔴 Riesgo crítico"
-                if dias <= 30:
-                    return "🟠 Riesgo alto"
-                if dias <= 60:
-                    return "🟡 Riesgo medio"
-                return "🟢 Riesgo bajo"
-
-            alertas_det["riesgo_vencimiento"] = alertas_det["dias_restantes"].apply(_nivel_riesgo)
-            alertas_det = alertas_det.sort_values("dias_restantes", ascending=True)
-
-            st.dataframe(
-                alertas_det.rename(columns={
-                    "razon_social": "Cliente", "zona": "Zona", "vigencia": "Vigencia",
-                    "dias_restantes": "Días restantes", "renovacion": "Renovación",
-                    "riesgo_vencimiento": "Riesgo de vencimiento",
-                }),
-                width='stretch',
-                hide_index=True,
-                height=min(400, 44 + 35 * len(alertas)),
-                column_config={
-                    "Vigencia": st.column_config.DateColumn("Vigencia", format="DD/MM/YYYY"),
-                    "Días restantes": st.column_config.NumberColumn("Días restantes", format="%d días"),
-                    "Renovación": st.column_config.TextColumn("Renovación"),
-                    "Riesgo de vencimiento": st.column_config.TextColumn("Riesgo de vencimiento"),
-                },
-            )
+    cfg_activa = GARANTIAS_CONFIG if vista_cartera_garantias == "Garantías" else CARTERA_CONFIG
+    render_salud_ciclo_vida(cfg_activa)
