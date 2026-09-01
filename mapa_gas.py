@@ -16,6 +16,7 @@ from io import BytesIO
 import xml.etree.ElementTree as ET
 import unicodedata
 import re
+from pathlib import Path
 from datetime import date, datetime
 import plotly.graph_objects as go
 from fpdf import FPDF
@@ -981,6 +982,107 @@ def get_connection():
     return pyodbc.connect(conn_str, timeout=timeout)
 
 
+def _leer_csv_flexible(ruta: Path) -> pd.DataFrame:
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            return pd.read_csv(ruta, encoding=enc)
+        except UnicodeDecodeError:
+            continue
+    return pd.read_csv(ruta)
+
+
+def _resolver_ruta_datos(clave_secret: str, default_name: str) -> Path:
+    base = Path(__file__).resolve().parent
+    ruta_cfg = str(st.secrets.get("csv", {}).get(clave_secret, "")).strip() if hasattr(st, "secrets") else ""
+    if ruta_cfg:
+        ruta = Path(ruta_cfg)
+        if not ruta.is_absolute():
+            ruta = (base / ruta).resolve()
+        return ruta
+    return (base / default_name).resolve()
+
+
+def _cargar_clientes_desde_csv(cols_clientes: list[str]) -> pd.DataFrame:
+    ruta = _resolver_ruta_datos("clientes_path", "bv_hop_registroclientes.csv")
+    if not ruta.exists():
+        raise FileNotFoundError(
+            f"No se encontró el CSV de clientes: {ruta}. "
+            "Crea `bv_hop_registroclientes.csv` o define `[csv].clientes_path` en Secrets."
+        )
+
+    df = _leer_csv_flexible(ruta)
+    df = df.rename(columns=lambda c: str(c).strip())
+    missing = [c for c in (cols_clientes + ["status"]) if c not in df.columns]
+    if missing:
+        raise KeyError(
+            "El CSV de clientes no contiene columnas requeridas: "
+            + ", ".join(missing)
+        )
+    return df[cols_clientes + ["status"]].copy()
+
+
+def _cargar_consumo_desde_csv() -> pd.DataFrame:
+    ruta = _resolver_ruta_datos("consumos_path", "bv_hop_consumos.csv")
+    if not ruta.exists():
+        raise FileNotFoundError(
+            f"No se encontró el CSV de consumos: {ruta}. "
+            "Crea `bv_hop_consumos.csv` o define `[csv].consumos_path` en Secrets."
+        )
+
+    con = _leer_csv_flexible(ruta)
+    con = con.rename(columns=lambda c: str(c).strip())
+
+    if "archivado" in con.columns:
+        archivado_num = pd.to_numeric(con["archivado"], errors="coerce")
+        con = con[(archivado_num.fillna(0) == 0)].copy()
+
+    if "fecha" in con.columns:
+        con["fecha"] = pd.to_datetime(con["fecha"], errors="coerce")
+    elif all(c in con.columns for c in ["anio", "mes", "dia"]):
+        anio = pd.to_numeric(con["anio"], errors="coerce")
+        mes = pd.to_numeric(con["mes"], errors="coerce")
+        dia = pd.to_numeric(con["dia"], errors="coerce")
+        con["fecha"] = pd.to_datetime(
+            pd.DataFrame({"year": anio, "month": mes, "day": dia}),
+            errors="coerce",
+        )
+    else:
+        raise KeyError(
+            "El CSV de consumos debe incluir `fecha` o (`anio`, `mes`, `dia`)."
+        )
+
+    consumo_candidatas = [
+        "consumo_gj", "CONSUMO", "consumo", "Consumo", "CONSUMO_GJ", "Consumo_GJ"
+    ]
+    consumo_col = next((c for c in consumo_candidatas if c in con.columns), None)
+    if consumo_col is None:
+        raise KeyError(
+            "El CSV de consumos no contiene columna de consumo. "
+            "Prueba con `consumo_gj` o `CONSUMO`."
+        )
+
+    if "id_instalacion" not in con.columns:
+        raise KeyError("El CSV de consumos debe contener `id_instalacion`.")
+
+    con = con.dropna(subset=["id_instalacion", "fecha"]).copy()
+    con["consumo_gj"] = pd.to_numeric(con[consumo_col], errors="coerce")
+    con = con.dropna(subset=["consumo_gj"])
+    con = con[con["fecha"] >= pd.Timestamp("2026-01-01")]
+
+    df_consumo_diario = (
+        con.groupby(["id_instalacion", "fecha"], as_index=False)["consumo_gj"]
+        .sum()
+        .sort_values(["id_instalacion", "fecha"])
+        .reset_index(drop=True)
+    )
+    return df_consumo_diario
+
+
+def _usar_modo_csv() -> bool:
+    modo = str(st.secrets.get("app", {}).get("data_source", "")).strip().lower() if hasattr(st, "secrets") else ""
+    return modo == "csv"
+
+
 # --- Carga de datos con caché ---
 @st.cache_data(ttl=3600)
 def cargar_datos():
@@ -991,61 +1093,64 @@ def cargar_datos():
     cualquier rango de fechas exacto. Los distintos periodos (totales,
     mensuales) se construyen sobre la marcha a partir de este detalle
     diario (ver `construir_consumo_mensual`)."""
-    conn = get_connection()
-
     cols = COLS_CLIENTES
 
-    r = pd.read_sql(
-        f"SELECT {', '.join(cols + ['status'])} "
-        "FROM bv_hop_registroclientes", conn
-    )
+    if _usar_modo_csv():
+        df = _cargar_clientes_desde_csv(cols)
+        df_consumo_diario = _cargar_consumo_desde_csv()
+    else:
+        conn = get_connection()
 
-    con = pd.read_sql(
-        "SELECT "
-        "    id_instalacion, "
-        "    EXTRACT(YEAR FROM fecha) AS anio, "
-        "    EXTRACT(MONTH FROM fecha) AS mes, "
-        "    EXTRACT(DAY FROM fecha) AS dia, "
-        "    SUM(consumo_gj) AS CONSUMO "
-        "FROM bv_hop_consumos "
-        "WHERE fecha >= '2026-01-01' "
-        "  AND archivado = 0 "
-        "GROUP BY "
-        "    id_instalacion, "
-        "    EXTRACT(YEAR FROM fecha), "
-        "    EXTRACT(MONTH FROM fecha), "
-        "    EXTRACT(DAY FROM fecha) ",
-        conn
-    )
+        r = pd.read_sql(
+            f"SELECT {', '.join(cols + ['status'])} "
+            "FROM bv_hop_registroclientes", conn
+        )
 
-    con = con.rename(columns=lambda c: str(c).strip())
-    consumo_col = next((c for c in con.columns if c.upper() == 'CONSUMO'), None)
-    if consumo_col is None:
-        raise KeyError(f"No se encontró la columna de consumo. Columnas disponibles: {list(con.columns)}")
+        con = pd.read_sql(
+            "SELECT "
+            "    id_instalacion, "
+            "    EXTRACT(YEAR FROM fecha) AS anio, "
+            "    EXTRACT(MONTH FROM fecha) AS mes, "
+            "    EXTRACT(DAY FROM fecha) AS dia, "
+            "    SUM(consumo_gj) AS CONSUMO "
+            "FROM bv_hop_consumos "
+            "WHERE fecha >= '2026-01-01' "
+            "  AND archivado = 0 "
+            "GROUP BY "
+            "    id_instalacion, "
+            "    EXTRACT(YEAR FROM fecha), "
+            "    EXTRACT(MONTH FROM fecha), "
+            "    EXTRACT(DAY FROM fecha) ",
+            conn
+        )
 
-    con['anio'] = pd.to_numeric(con['anio'], errors='coerce').astype('Int64')
-    con['mes'] = pd.to_numeric(con['mes'], errors='coerce').astype('Int64')
-    con['dia'] = pd.to_numeric(con['dia'], errors='coerce').astype('Int64')
-    con = con.dropna(subset=['anio', 'mes', 'dia'])
+        con = con.rename(columns=lambda c: str(c).strip())
+        consumo_col = next((c for c in con.columns if c.upper() == 'CONSUMO'), None)
+        if consumo_col is None:
+            raise KeyError(f"No se encontró la columna de consumo. Columnas disponibles: {list(con.columns)}")
 
-    # Construye la fecha real (día a día) en lugar de colapsar a "AAAA_MM".
-    con['fecha'] = pd.to_datetime(
-        con[['anio', 'mes', 'dia']].astype(int).rename(
-            columns={'anio': 'year', 'mes': 'month', 'dia': 'day'}
-        ),
-        errors='coerce',
-    )
-    con = con.dropna(subset=['fecha'])
+        con['anio'] = pd.to_numeric(con['anio'], errors='coerce').astype('Int64')
+        con['mes'] = pd.to_numeric(con['mes'], errors='coerce').astype('Int64')
+        con['dia'] = pd.to_numeric(con['dia'], errors='coerce').astype('Int64')
+        con = con.dropna(subset=['anio', 'mes', 'dia'])
 
-    df_consumo_diario = (
-        con[['id_instalacion', 'fecha', consumo_col]]
-        .rename(columns={consumo_col: 'consumo_gj'})
-        .sort_values(['id_instalacion', 'fecha'])
-        .reset_index(drop=True)
-    )
-    df_consumo_diario['consumo_gj'] = pd.to_numeric(df_consumo_diario['consumo_gj'], errors='coerce')
+        con['fecha'] = pd.to_datetime(
+            con[['anio', 'mes', 'dia']].astype(int).rename(
+                columns={'anio': 'year', 'mes': 'month', 'dia': 'day'}
+            ),
+            errors='coerce',
+        )
+        con = con.dropna(subset=['fecha'])
 
-    df = r[cols + ['status']].copy()
+        df_consumo_diario = (
+            con[['id_instalacion', 'fecha', consumo_col]]
+            .rename(columns={consumo_col: 'consumo_gj'})
+            .sort_values(['id_instalacion', 'fecha'])
+            .reset_index(drop=True)
+        )
+        df_consumo_diario['consumo_gj'] = pd.to_numeric(df_consumo_diario['consumo_gj'], errors='coerce')
+
+        df = r[cols + ['status']].copy()
 
     # Normalización del código postal (5 dígitos) para la geocodificación.
     df['cp_localizacion'] = (
@@ -1618,6 +1723,8 @@ else:
     resultado = resultado.iloc[0:0].copy()
 
 st.title("Registro de Clientes y Consumos Diarios")
+if _usar_modo_csv():
+    st.info("Modo temporal CSV activo (sin conexión a Denodo).")
 
 # Nota: el filtro por Id de Instalación se define de forma independiente
 # dentro de cada sección (Mapa, Clientes, Top 10), para que no afecte a las demás.
