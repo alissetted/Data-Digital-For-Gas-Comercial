@@ -1488,6 +1488,45 @@ def calcular_zona_geografica(df):
     return df
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _stats_zona_mapa(df, col_consumo):
+    """Consumo total y número de clientes por zona, cacheado por el contenido.
+
+    `crear_mapa` se reconstruye en cada rerun de la sección Mapa, aunque los
+    datos visibles no cambien; cachear este agregado evita repetir el groupby."""
+    if 'zona' not in df.columns:
+        return pd.Series(dtype='float64'), pd.Series(dtype='int64')
+    consumo_zona = df.groupby('zona')[col_consumo].sum()
+    clientes_zona = df.groupby('zona').size()
+    return consumo_zona, clientes_zona
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _resumen_zona_tabla(df, col_consumo):
+    """Tabla resumen por zona para la sección Mapa."""
+    return (
+        df.dropna(subset=['zona'])
+        .groupby('zona')
+        .agg(Clientes=('zona', 'size'), Consumo=(col_consumo, 'sum'))
+        .reset_index()
+        .sort_values('Consumo', ascending=False)
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _resumen_zona_reporte(resumen_base):
+    """Tabla de resumen por zona para el generador de reportes."""
+    return (
+        resumen_base.groupby('zona_vpm', as_index=False)
+        .agg({
+            'Consumo_Total_Periodo_GJ': 'sum',
+            'spread_ponderado': 'sum',
+        })
+        .rename(columns={'zona_vpm': 'Zona'})
+        .sort_values('Consumo_Total_Periodo_GJ', ascending=False)
+    )
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def _pipeline_geo(status_seleccionados: tuple) -> pd.DataFrame:
     """Geocodificación + zona/zona_geografica para los clientes con status en
@@ -1769,8 +1808,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
         max_lon=-84.0,
     )
 
-    consumo_zona = df.groupby('zona')[col_consumo].sum() if 'zona' in df.columns else {}
-    clientes_zona = df.groupby('zona').size() if 'zona' in df.columns else {}
+    consumo_zona, clientes_zona = _stats_zona_mapa(df, col_consumo)
 
     # --- Capa 1: polígonos de zonas ---
     for name, coords in ZONAS.items():
@@ -2206,16 +2244,22 @@ st.session_state["max_gj_global"] = max_gj_global
 
 with st.sidebar:
     st.markdown('<div class="engie-section">Filtrar por zona</div>', unsafe_allow_html=True)
+    opciones_zona_filtrables = [z for z in opciones_zona if z != "Vista general"]
+    st.session_state["zona_widget_options"] = opciones_zona_filtrables
     zonas_seleccionadas = st.multiselect(
         "Filtrar por zona",
-        options=[z for z in opciones_zona if z != "Vista general"],
+        options=opciones_zona_filtrables,
         key="zona_widget_multi",
         placeholder="Vista general",
         label_visibility="collapsed",
         on_change=sync_zona_widget_unica,
         help="Solo permite 1 zona activa; al elegir otra, reemplaza automaticamente la anterior.",
     )
-    if len(zonas_seleccionadas) > 1:
+    if opciones_zona_filtrables and len(zonas_seleccionadas) >= len(opciones_zona_filtrables):
+        st.session_state.zona_widget_multi = []
+        st.session_state.zona_widget = "Vista general"
+        zonas_seleccionadas = []
+    elif len(zonas_seleccionadas) > 1:
         zona_activa = zonas_seleccionadas[-1]
         st.session_state.zona_widget_multi = [zona_activa]
         st.session_state.zona_widget = zona_activa
@@ -2500,7 +2544,7 @@ def render_salud_ciclo_vida(cfg):
 
         col_bajas_det, col_altas_det = st.columns(2)
         with col_bajas_det:
-            with st.expander(f"{cfg['expander_baja_title']} · {month_to_spanish_label(mes_historico)} ({len(bajas_mes_historico)})"):
+            with st.expander(f"{cfg['expander_baja_title']} · {month_to_spanish_label(mes_historico)} ({len(bajas_mes_historico)})", expanded=True):
                 if bajas_mes_historico.empty:
                     st.caption(cfg["expander_baja_empty"])
                 else:
@@ -2519,7 +2563,7 @@ def render_salud_ciclo_vida(cfg):
                         },
                     )
         with col_altas_det:
-            with st.expander(f"{cfg['expander_alta_title']} · {month_to_spanish_label(mes_historico)} ({len(altas_mes_historico)})"):
+            with st.expander(f"{cfg['expander_alta_title']} · {month_to_spanish_label(mes_historico)} ({len(altas_mes_historico)})", expanded=True):
                 if altas_mes_historico.empty:
                     st.caption(cfg["expander_alta_empty"])
                 else:
@@ -3272,15 +3316,7 @@ elif seccion == "📄  Reportes":
                 else:
                     resumen_base['spread_ponderado'] = 0.0
 
-                resumen_zona = (
-                    resumen_base.groupby('zona_vpm', as_index=False)
-                    .agg({
-                        'Consumo_Total_Periodo_GJ': 'sum',
-                        'spread_ponderado': 'sum',
-                    })
-                    .rename(columns={'zona_vpm': 'Zona'})
-                    .sort_values('Consumo_Total_Periodo_GJ', ascending=False)
-                )
+                resumen_zona = _resumen_zona_reporte(resumen_base)
 
                 total_consumo_zonas = float(resumen_zona['Consumo_Total_Periodo_GJ'].sum())
                 if total_consumo_zonas > 0:
