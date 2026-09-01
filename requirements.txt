@@ -1,12 +1,12 @@
 streamlit>=1.39,<2
 streamlit-folium>=0.22.1
 streamlit-sortables>=0.3.1
-pandas>=2.2,<3
-numpy>=1.26,<2.3
+pandas>=2.2
+numpy>=1.26
 pgeocode>=0.5.0
-folium>=0.17,<0.21
+folium>=0.17
 branca>=0.8.0
-shapely>=2.0.4,<2.2
+shapely>=2.0.4
 plotly>=5.24,<7
 pillow>=10,<13
 openpyxl>=3.1.5
