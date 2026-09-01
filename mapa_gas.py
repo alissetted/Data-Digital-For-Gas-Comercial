@@ -590,6 +590,13 @@ def normalizar_status(valor):
     return mapa.get(texto, "Sin status")
 
 
+def normalizar_id_instalacion_col(serie):
+    s = serie.astype(str).str.strip()
+    s = s.str.replace(r"\.0$", "", regex=True)
+    s = s.replace({"": np.nan, "nan": np.nan, "None": np.nan, "<NA>": np.nan})
+    return s
+
+
 def fecha_baja_es_valida(fecha):
     """True solo si hay una fecha de baja real (no vacia y no placeholder 9999)."""
     if pd.isna(fecha):
@@ -1064,6 +1071,8 @@ def _cargar_consumo_desde_csv() -> pd.DataFrame:
     if "id_instalacion" not in con.columns:
         raise KeyError("El CSV de consumos debe contener `id_instalacion`.")
 
+    con["id_instalacion"] = normalizar_id_instalacion_col(con["id_instalacion"])
+
     con = con.dropna(subset=["id_instalacion", "fecha"]).copy()
     con["consumo_gj"] = pd.to_numeric(con[consumo_col], errors="coerce")
     con = con.dropna(subset=["consumo_gj"])
@@ -1173,6 +1182,12 @@ def cargar_datos():
     df['status_norm'] = df['status'].apply(normalizar_status)
     df['zona'] = df['zona_vpm'].astype(str).str.strip()
 
+    if 'id_instalacion' in df.columns:
+        df['id_instalacion'] = normalizar_id_instalacion_col(df['id_instalacion'])
+    if 'id_instalacion' in df_consumo_diario.columns:
+        df_consumo_diario['id_instalacion'] = normalizar_id_instalacion_col(df_consumo_diario['id_instalacion'])
+        df_consumo_diario = df_consumo_diario.dropna(subset=['id_instalacion'])
+
     return df, df_consumo_diario
 
 
@@ -1225,7 +1240,10 @@ def _consumo_total_cached(fecha_ini, fecha_fin):
     """Versión cacheada de sumar_consumo_periodo, indexada por (fecha_ini, fecha_fin).
     Evita re-agrupar el detalle diario en cada interacción de la UI."""
     _, consumo_diario = cargar_datos()
-    return sumar_consumo_periodo(consumo_diario, fecha_ini, fecha_fin).reset_index()
+    total = sumar_consumo_periodo(consumo_diario, fecha_ini, fecha_fin).reset_index()
+    if 'id_instalacion' in total.columns:
+        total['id_instalacion'] = normalizar_id_instalacion_col(total['id_instalacion'])
+    return total
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1233,7 +1251,10 @@ def _consumo_mensual_cached(fecha_ini, fecha_fin):
     """Versión cacheada de construir_consumo_mensual, indexada por (fecha_ini, fecha_fin).
     Evita re-ejecutar el pivot_table sobre el detalle diario en cada rerun."""
     _, consumo_diario = cargar_datos()
-    return construir_consumo_mensual(consumo_diario, fecha_ini, fecha_fin)
+    mensual = construir_consumo_mensual(consumo_diario, fecha_ini, fecha_fin)
+    if 'id_instalacion' in mensual.columns:
+        mensual['id_instalacion'] = normalizar_id_instalacion_col(mensual['id_instalacion'])
+    return mensual
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
