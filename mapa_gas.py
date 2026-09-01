@@ -602,6 +602,24 @@ def column_config_fechas(columnas, renombres=None):
     return cfg
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _resumen_zona_reporte(resumen_base):
+    """Tabla 'Resumen por zona' del Generador de reportes, cacheada por el
+    contenido de `resumen_base`. Evita repetir el groupby/agg cuando el
+    reporte se vuelve a renderizar (p.ej. al abrir "Manage Columns" o exportar)
+    sin que hayan cambiado los filtros de fecha/zona/status."""
+    return (
+        resumen_base.groupby('zona_vpm', as_index=False)
+        .agg({
+            'Consumo_Total_Periodo_GJ': 'sum',
+            'spread_ponderado': 'sum',
+        })
+        .rename(columns={'zona_vpm': 'Zona'})
+        .sort_values('Consumo_Total_Periodo_GJ', ascending=False)
+    )
+
+
+
 @st.dialog("Manage Columns", width="large")
 def _dialog_manage_columns(columnas_disponibles, columnas_default):
     """Modal "Manage Columns" del generador de reportes.
@@ -1344,11 +1362,14 @@ def _geocodificar_cps(cp_unicos: tuple) -> pd.DataFrame:
 def agregar_coordenadas(df):
     """Agrega columnas lat/lon al DataFrame haciendo merge con el mapa
     CP -> coordenadas obtenido de la caché (que solo hashea los CPs únicos)."""
-    cps = df['cp_localizacion'].astype('string').str.zfill(5)
-    cp_unicos = tuple(sorted(cps.dropna().unique().tolist()))
-    geo_por_cp = _geocodificar_cps(cp_unicos)
     df = df.copy()
-    df['cp_localizacion'] = cps
+    df['cp_localizacion'] = df['cp_localizacion'].astype('string').str.zfill(5)
+    cp_unicos = tuple(sorted(df['cp_localizacion'].dropna().unique().tolist()))
+    if not cp_unicos:
+        df['lat'] = np.nan
+        df['lon'] = np.nan
+        return df
+    geo_por_cp = _geocodificar_cps(cp_unicos)
     return df.merge(geo_por_cp, on='cp_localizacion', how='left')
 
 
@@ -1391,26 +1412,35 @@ def calcular_zona_geografica(df):
     """Calcula, a partir de las coordenadas (lat/lon) de cada cliente, la zona
     geográfica real según los polígonos de ZONAS (point-in-polygon).
 
-    Esto es independiente de la zona declarada en el Excel (columna
-    'zona'/'zona_vpm') y permite detectar clientes cuya zona declarada no
-    coincide con la zona donde realmente cae su punto en el mapa.
-
-    Vectorizado con `shapely.vectorized.contains`: evalúa el test
-    punto-en-polígono para todos los clientes de una sola vez (en C), en vez
-    de crear un `Point` y llamar `poly.contains(p)` fila a fila en Python."""
+    Se evita el chequeo fila a fila y la comparación con `None` dentro del loop,
+    usando un arreglo de índices válidos y asignación vectorizada sobre esos
+    índices. Esto reduce el costo de la comprobación de cada cliente cuando el
+    dataframe tiene miles de registros.
+    """
     df = df.copy()
-    lat = pd.to_numeric(df['lat'], errors='coerce').to_numpy()
-    lon = pd.to_numeric(df['lon'], errors='coerce').to_numpy()
-    valido = ~(np.isnan(lat) | np.isnan(lon))
+    if df.empty:
+        df['zona_geografica'] = pd.Series(dtype=object)
+        return df
 
-    zona_geografica = np.full(len(df), None, dtype=object)
+    lat = pd.to_numeric(df['lat'], errors='coerce').to_numpy(dtype=float)
+    lon = pd.to_numeric(df['lon'], errors='coerce').to_numpy(dtype=float)
+    valido = ~(np.isnan(lat) | np.isnan(lon))
+    zona_geografica = np.full(len(df), np.nan, dtype=object)
+
     if valido.any():
-        for name, poly in _polys().items():
-            sin_asignar = valido & (zona_geografica == None)  # noqa: E711
-            if not sin_asignar.any():
+        idx_validos = np.nonzero(valido)[0]
+        polys = _polys()
+        for name, poly in polys.items():
+            # Quedarse solo con los puntos aún sin asignar logra evitar evaluar
+            # dos veces el mismo cliente para cada polígono.
+            # `zona_geografica` es object (mezcla NaN + strings), usar pd.isna
+            # evita TypeError de np.isnan con tipos no numéricos.
+            aun_sin_asignar = pd.isna(zona_geografica[idx_validos])
+            if not np.any(aun_sin_asignar):
                 break
-            dentro = shapely_contains(poly, lon, lat)
-            zona_geografica[sin_asignar & dentro] = name
+            idx_contenidos = idx_validos[aun_sin_asignar]
+            dentro = shapely_contains(poly, lon[idx_contenidos], lat[idx_contenidos])
+            zona_geografica[idx_contenidos[dentro]] = name
 
     df['zona_geografica'] = zona_geografica
     return df
@@ -1439,6 +1469,21 @@ def _pipeline_geo(status_seleccionados: tuple) -> pd.DataFrame:
 def bounds_zona(name):
     minx, miny, maxx, maxy = _polys()[name].bounds
     return [[miny, minx], [maxy, maxx]]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _resumen_zona_tabla(df, col_consumo):
+    """Tabla 'Consumo por zona' de la secci\u00f3n Mapa, cacheada por (df, col_consumo).
+    Evita repetir el groupby cuando el mapa se reconstruye por acciones que no
+    cambian ni los clientes visibles ni la columna de consumo (p.ej. activar
+    una capa KML o cerrar el popover de filtros)."""
+    return (
+        df.dropna(subset=['zona'])
+        .groupby('zona')
+        .agg(Clientes=('zona', 'size'), Consumo=(col_consumo, 'sum'))
+        .reset_index()
+        .sort_values('Consumo', ascending=False)
+    )
 
 
 class HomeButtonControl(MacroElement):
@@ -1648,13 +1693,13 @@ def mostrar_intro_globo(destino_lat, destino_lon, zoom_destino=7.0):
         12, CANVAS_R, SIZE, CANVAS_R, TILT, H, W
     )
 
-    pasos_giro = 100
+    pasos_giro = 60
     lon = -50.0
     for i in range(pasos_giro):
         lon = -50 + i * (360 / pasos_giro)  # una vuelta completa, suave
         img = _frame_rotacion_rapida(textura, visible_giro, row_giro, delta_lon_giro, lon, SIZE, W)
         placeholder.markdown(_html_de_imagen(img), unsafe_allow_html=True)
-        time.sleep(0.014)
+        time.sleep(0.005)
 
     pasos_zoom = 16
     lon_ini, lat_ini = lon, 12
@@ -1684,12 +1729,26 @@ def mostrar_intro_globo(destino_lat, destino_lon, zoom_destino=7.0):
 
 
 # --- Construcción del mapa (objeto folium) ---
+@st.cache_data(ttl=3600, show_spinner=False)
+def _stats_zona_mapa(df, col_consumo):
+    """Consumo total y n° de clientes por zona, cacheado por (df, col_consumo).
+    `crear_mapa` se reconstruye en cada rerun de la sección Mapa (p.ej. al
+    activar/desactivar una capa KML o buscar un CP), aunque el dataframe de
+    clientes y la columna de consumo elegida no cambien; cachear estos dos
+    groupby evita repetir esa agregación cuando el contenido es idéntico."""
+    if 'zona' not in df.columns:
+        return pd.Series(dtype='float64'), pd.Series(dtype='int64')
+    consumo_zona = df.groupby('zona')[col_consumo].sum()
+    clientes_zona = df.groupby('zona').size()
+    return consumo_zona, clientes_zona
+
+
 def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min_gj=0, cp_marker=None):
     m = folium.Map(
         location=VISTA_CENTRO,
         zoom_start=VISTA_ZOOM,
         min_zoom=VISTA_ZOOM,
-        tiles="CartoDB positron",
+        tiles="OpenStreetMap",
         max_bounds=True,
         min_lat=12.0,
         max_lat=35.0,
@@ -1697,8 +1756,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
         max_lon=-84.0,
     )
 
-    consumo_zona = df.groupby('zona')[col_consumo].sum() if 'zona' in df.columns else {}
-    clientes_zona = df.groupby('zona').size() if 'zona' in df.columns else {}
+    consumo_zona, clientes_zona = _stats_zona_mapa(df, col_consumo)
 
     # --- Capa 1: polígonos de zonas ---
     for name, coords in ZONAS.items():
@@ -1957,6 +2015,14 @@ def sync_gj_global_from_exact():
 def sync_zona_widget_unica():
     """Mantiene una sola zona seleccionada y conserva la mas reciente."""
     seleccionadas = st.session_state.get("zona_widget_multi", [])
+    opciones_zona = st.session_state.get("zona_widget_options", [])
+
+    # "Select all" del multiselect equivale a quitar filtro de zona.
+    if opciones_zona and len(seleccionadas) >= len(opciones_zona):
+        st.session_state["zona_widget_multi"] = []
+        st.session_state["zona_widget"] = "Vista general"
+        return
+
     if not seleccionadas:
         st.session_state["zona_widget"] = "Vista general"
         return
@@ -2129,15 +2195,21 @@ st.session_state["max_gj_global"] = max_gj_global
 
 with st.sidebar:
     st.markdown('<div class="engie-section">Filtrar por zona</div>', unsafe_allow_html=True)
+    opciones_zona_filtrables = [z for z in opciones_zona if z != "Vista general"]
+    st.session_state["zona_widget_options"] = opciones_zona_filtrables
     zonas_seleccionadas = st.multiselect(
         "Filtrar por zona",
-        options=[z for z in opciones_zona if z != "Vista general"],
+        options=opciones_zona_filtrables,
         key="zona_widget_multi",
         placeholder="Vista general",
         label_visibility="collapsed",
         on_change=sync_zona_widget_unica,
-        help="Solo permite 1 zona activa; al elegir otra, reemplaza automaticamente la anterior.",
+        help="Solo permite 1 zona activa; al elegir otra, reemplaza automaticamente la anterior. Si usas Select all, se aplica Vista general.",
     )
+    if opciones_zona_filtrables and len(zonas_seleccionadas) >= len(opciones_zona_filtrables):
+        st.session_state.zona_widget_multi = []
+        st.session_state.zona_widget = "Vista general"
+        zonas_seleccionadas = []
     if len(zonas_seleccionadas) > 1:
         zona_activa = zonas_seleccionadas[-1]
         st.session_state.zona_widget_multi = [zona_activa]
@@ -2896,13 +2968,7 @@ if seccion == "🗺️  Mapa":
             st.markdown(f"**Zonas:** {leyenda}", unsafe_allow_html=True)
 
             st.markdown("**Consumo por zona**")
-            resumen_zona = (
-                df_geo_mapa.dropna(subset=['zona'])
-                .groupby('zona')
-                .agg(Clientes=('zona', 'size'), Consumo=(col_sel, 'sum'))
-                .reset_index()
-                .sort_values('Consumo', ascending=False)
-            )
+            resumen_zona = _resumen_zona_tabla(df_geo_mapa, col_sel)
             st.dataframe(
                 resumen_zona.rename(columns={'zona': 'Zona', 'Consumo': 'Consumo (GJ)'})
                 .style.format({'Consumo (GJ)': '{:,.0f}'}),
@@ -3195,15 +3261,7 @@ elif seccion == "📄  Reportes":
                 else:
                     resumen_base['spread_ponderado'] = 0.0
 
-                resumen_zona = (
-                    resumen_base.groupby('zona_vpm', as_index=False)
-                    .agg({
-                        'Consumo_Total_Periodo_GJ': 'sum',
-                        'spread_ponderado': 'sum',
-                    })
-                    .rename(columns={'zona_vpm': 'Zona'})
-                    .sort_values('Consumo_Total_Periodo_GJ', ascending=False)
-                )
+                resumen_zona = _resumen_zona_reporte(resumen_base)
 
                 total_consumo_zonas = float(resumen_zona['Consumo_Total_Periodo_GJ'].sum())
                 if total_consumo_zonas > 0:
