@@ -1,4 +1,2 @@
-unixodbc
-unixodbc-dev
 g++
 zlib1g-dev

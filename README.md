@@ -18,21 +18,12 @@ streamlit run mapa_gas.py
    - **Repository**: este repo
    - **Branch**: `Desarrollo` (o la rama donde hagas push)
    - **Main file path**: `mapa_gas.py`
-5. Antes de deployar, abre **Advanced settings > Secrets** y pega tus credenciales usando el formato de `.streamlit/secrets.toml.example`.
+5. Antes de deployar, abre **Advanced settings > Secrets** y pega la configuración CSV usando el formato de `.streamlit/secrets.toml.example`.
 6. Deploy.
 
-## Secrets requeridos
+## Configuración de datos (CSV)
 
-La app busca una sección `[denodo]` en `st.secrets`.
-
-Puedes usar:
-
-- `CONNECTION_STRING` (recomendado), o
-- claves separadas (`DRIVER`, `SERVER`, `DATABASE`, `UID`, `PWD`).
-
-## Modo temporal sin Denodo (CSV)
-
-Si no hay acceso de red/ODBC a Denodo, la app puede correr con CSV.
+La app está configurada para leer exclusivamente desde archivos CSV locales.
 
 1. Coloca estos archivos en la raíz del repo:
     - `bv_hop_registroclientes.csv`
@@ -40,12 +31,10 @@ Si no hay acceso de red/ODBC a Denodo, la app puede correr con CSV.
 2. En `Secrets` de Streamlit agrega:
 
 ```toml
-[app]
-data_source = "csv"
-
 [csv]
 clientes_path = "bv_hop_registroclientes.csv"
 consumos_path = "bv_hop_consumos.csv"
+garantias_path = "bv_hop_garantia.csv"
 ```
 
 Formato esperado:
@@ -54,14 +43,15 @@ Formato esperado:
 - `bv_hop_consumos.csv`: debe incluir `id_instalacion` y:
    - `fecha` + `consumo_gj`, o
    - `anio`, `mes`, `dia` + `CONSUMO`.
+- `bv_hop_garantia.csv`: debe incluir todas las columnas de `COLS_GARANTIA`.
+
+También se aceptan estos nombres alternativos ya presentes en el directorio:
+
+- `customer_registry.csv`
+- `gas_consumption.csv`
+- `guarantees.csv`
 
 Notas:
 
 - Si existe columna `archivado`, la app filtrará `archivado = 0`.
 - Se considera consumo desde `2026-01-01` para mantener consistencia con la consulta original.
-
-## Notas importantes para pyodbc en nube
-
-- Este repo incluye `packages.txt` con paquetes de sistema para ODBC.
-- Si tu servidor exige un driver ODBC específico no disponible, necesitarás ajustar la conexión/driver en Secrets.
-- Si ves error de conexión al iniciar, revisa primero `Secrets` y conectividad de red al servidor Denodo.
