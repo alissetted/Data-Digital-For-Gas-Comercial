@@ -602,6 +602,24 @@ def column_config_fechas(columnas, renombres=None):
     return cfg
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _resumen_zona_reporte(resumen_base):
+    """Tabla 'Resumen por zona' del Generador de reportes, cacheada por el
+    contenido de `resumen_base`. Evita repetir el groupby/agg cuando el
+    reporte se vuelve a renderizar (p.ej. al abrir "Manage Columns" o exportar)
+    sin que hayan cambiado los filtros de fecha/zona/status."""
+    return (
+        resumen_base.groupby('zona_vpm', as_index=False)
+        .agg({
+            'Consumo_Total_Periodo_GJ': 'sum',
+            'spread_ponderado': 'sum',
+        })
+        .rename(columns={'zona_vpm': 'Zona'})
+        .sort_values('Consumo_Total_Periodo_GJ', ascending=False)
+    )
+
+
+
 @st.dialog("Manage Columns", width="large")
 def _dialog_manage_columns(columnas_disponibles, columnas_default):
     """Modal "Manage Columns" del generador de reportes.
@@ -1268,7 +1286,6 @@ def cargar_datos():
     mensuales) se construyen sobre la marcha a partir de este detalle
     diario (ver `construir_consumo_mensual`)."""
     cols = COLS_CLIENTES
-
     df = _cargar_clientes_desde_csv(cols)
     df_consumo_diario = _cargar_consumo_desde_csv()
 
@@ -1310,7 +1327,6 @@ def cargar_datos_garantias():
       - 'status_norm' usa `normalizar_status_garantia_serie` (3 categorías
         reales: Vigente/Liberado/Vencido, más 'Sin status')."""
     cols = COLS_GARANTIA
-
     df = _cargar_garantias_desde_csv(cols)
 
     df = df.dropna(subset=['razon_social'])
@@ -1416,11 +1432,14 @@ def _geocodificar_cps(cp_unicos: tuple) -> pd.DataFrame:
 def agregar_coordenadas(df):
     """Agrega columnas lat/lon al DataFrame haciendo merge con el mapa
     CP -> coordenadas obtenido de la caché (que solo hashea los CPs únicos)."""
-    cps = df['cp_localizacion'].astype('string').str.zfill(5)
-    cp_unicos = tuple(sorted(cps.dropna().unique().tolist()))
-    geo_por_cp = _geocodificar_cps(cp_unicos)
     df = df.copy()
-    df['cp_localizacion'] = cps
+    df['cp_localizacion'] = df['cp_localizacion'].astype('string').str.zfill(5)
+    cp_unicos = tuple(sorted(df['cp_localizacion'].dropna().unique().tolist()))
+    if not cp_unicos:
+        df['lat'] = np.nan
+        df['lon'] = np.nan
+        return df
+    geo_por_cp = _geocodificar_cps(cp_unicos)
     return df.merge(geo_por_cp, on='cp_localizacion', how='left')
 
 
@@ -1463,68 +1482,38 @@ def calcular_zona_geografica(df):
     """Calcula, a partir de las coordenadas (lat/lon) de cada cliente, la zona
     geográfica real según los polígonos de ZONAS (point-in-polygon).
 
-    Esto es independiente de la zona declarada en el Excel (columna
-    'zona'/'zona_vpm') y permite detectar clientes cuya zona declarada no
-    coincide con la zona donde realmente cae su punto en el mapa.
-
-    Vectorizado con `shapely.vectorized.contains`: evalúa el test
-    punto-en-polígono para todos los clientes de una sola vez (en C), en vez
-    de crear un `Point` y llamar `poly.contains(p)` fila a fila en Python."""
+    Se evita el chequeo fila a fila y la comparación con `None` dentro del loop,
+    usando un arreglo de índices válidos y asignación vectorizada sobre esos
+    índices. Esto reduce el costo de la comprobación de cada cliente cuando el
+    dataframe tiene miles de registros.
+    """
     df = df.copy()
-    lat = pd.to_numeric(df['lat'], errors='coerce').to_numpy()
-    lon = pd.to_numeric(df['lon'], errors='coerce').to_numpy()
-    valido = ~(np.isnan(lat) | np.isnan(lon))
+    if df.empty:
+        df['zona_geografica'] = pd.Series(dtype=object)
+        return df
 
-    zona_geografica = np.full(len(df), None, dtype=object)
+    lat = pd.to_numeric(df['lat'], errors='coerce').to_numpy(dtype=float)
+    lon = pd.to_numeric(df['lon'], errors='coerce').to_numpy(dtype=float)
+    valido = ~(np.isnan(lat) | np.isnan(lon))
+    zona_geografica = np.full(len(df), np.nan, dtype=object)
+
     if valido.any():
-        for name, poly in _polys().items():
-            sin_asignar = valido & (zona_geografica == None)  # noqa: E711
-            if not sin_asignar.any():
+        idx_validos = np.nonzero(valido)[0]
+        polys = _polys()
+        for name, poly in polys.items():
+            # Quedarse solo con los puntos aún sin asignar logra evitar evaluar
+            # dos veces el mismo cliente para cada polígono.
+            # `zona_geografica` es object (mezcla NaN + strings), usar pd.isna
+            # evita TypeError de np.isnan con tipos no numéricos.
+            aun_sin_asignar = pd.isna(zona_geografica[idx_validos])
+            if not np.any(aun_sin_asignar):
                 break
-            dentro = shapely_contains(poly, lon, lat)
-            zona_geografica[sin_asignar & dentro] = name
+            idx_contenidos = idx_validos[aun_sin_asignar]
+            dentro = shapely_contains(poly, lon[idx_contenidos], lat[idx_contenidos])
+            zona_geografica[idx_contenidos[dentro]] = name
 
     df['zona_geografica'] = zona_geografica
     return df
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _stats_zona_mapa(df, col_consumo):
-    """Consumo total y número de clientes por zona, cacheado por el contenido.
-
-    `crear_mapa` se reconstruye en cada rerun de la sección Mapa, aunque los
-    datos visibles no cambien; cachear este agregado evita repetir el groupby."""
-    if 'zona' not in df.columns:
-        return pd.Series(dtype='float64'), pd.Series(dtype='int64')
-    consumo_zona = df.groupby('zona')[col_consumo].sum()
-    clientes_zona = df.groupby('zona').size()
-    return consumo_zona, clientes_zona
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _resumen_zona_tabla(df, col_consumo):
-    """Tabla resumen por zona para la sección Mapa."""
-    return (
-        df.dropna(subset=['zona'])
-        .groupby('zona')
-        .agg(Clientes=('zona', 'size'), Consumo=(col_consumo, 'sum'))
-        .reset_index()
-        .sort_values('Consumo', ascending=False)
-    )
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _resumen_zona_reporte(resumen_base):
-    """Tabla de resumen por zona para el generador de reportes."""
-    return (
-        resumen_base.groupby('zona_vpm', as_index=False)
-        .agg({
-            'Consumo_Total_Periodo_GJ': 'sum',
-            'spread_ponderado': 'sum',
-        })
-        .rename(columns={'zona_vpm': 'Zona'})
-        .sort_values('Consumo_Total_Periodo_GJ', ascending=False)
-    )
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -1550,6 +1539,21 @@ def _pipeline_geo(status_seleccionados: tuple) -> pd.DataFrame:
 def bounds_zona(name):
     minx, miny, maxx, maxy = _polys()[name].bounds
     return [[miny, minx], [maxy, maxx]]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _resumen_zona_tabla(df, col_consumo):
+    """Tabla 'Consumo por zona' de la secci\u00f3n Mapa, cacheada por (df, col_consumo).
+    Evita repetir el groupby cuando el mapa se reconstruye por acciones que no
+    cambian ni los clientes visibles ni la columna de consumo (p.ej. activar
+    una capa KML o cerrar el popover de filtros)."""
+    return (
+        df.dropna(subset=['zona'])
+        .groupby('zona')
+        .agg(Clientes=('zona', 'size'), Consumo=(col_consumo, 'sum'))
+        .reset_index()
+        .sort_values('Consumo', ascending=False)
+    )
 
 
 class HomeButtonControl(MacroElement):
@@ -1759,13 +1763,13 @@ def mostrar_intro_globo(destino_lat, destino_lon, zoom_destino=7.0):
         12, CANVAS_R, SIZE, CANVAS_R, TILT, H, W
     )
 
-    pasos_giro = 100
+    pasos_giro = 60
     lon = -50.0
     for i in range(pasos_giro):
         lon = -50 + i * (360 / pasos_giro)  # una vuelta completa, suave
         img = _frame_rotacion_rapida(textura, visible_giro, row_giro, delta_lon_giro, lon, SIZE, W)
         placeholder.markdown(_html_de_imagen(img), unsafe_allow_html=True)
-        time.sleep(0.014)
+        time.sleep(0.005)
 
     pasos_zoom = 16
     lon_ini, lat_ini = lon, 12
@@ -1795,12 +1799,26 @@ def mostrar_intro_globo(destino_lat, destino_lon, zoom_destino=7.0):
 
 
 # --- Construcción del mapa (objeto folium) ---
+@st.cache_data(ttl=3600, show_spinner=False)
+def _stats_zona_mapa(df, col_consumo):
+    """Consumo total y n° de clientes por zona, cacheado por (df, col_consumo).
+    `crear_mapa` se reconstruye en cada rerun de la sección Mapa (p.ej. al
+    activar/desactivar una capa KML o buscar un CP), aunque el dataframe de
+    clientes y la columna de consumo elegida no cambien; cachear estos dos
+    groupby evita repetir esa agregación cuando el contenido es idéntico."""
+    if 'zona' not in df.columns:
+        return pd.Series(dtype='float64'), pd.Series(dtype='int64')
+    consumo_zona = df.groupby('zona')[col_consumo].sum()
+    clientes_zona = df.groupby('zona').size()
+    return consumo_zona, clientes_zona
+
+
 def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min_gj=0, cp_marker=None):
     m = folium.Map(
         location=VISTA_CENTRO,
         zoom_start=VISTA_ZOOM,
         min_zoom=VISTA_ZOOM,
-        tiles="CartoDB positron",
+        tiles="OpenStreetMap",
         max_bounds=True,
         min_lat=12.0,
         max_lat=35.0,
@@ -2017,27 +2035,29 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
             m.fit_bounds([[lat_min, lon_min], [lat_max, lon_max]])
 
     # --- Marcador de búsqueda por código postal ---
-    if cp_marker:
-        lat_cp = cp_marker.get('lat')
-        lon_cp = cp_marker.get('lon')
-        cp_val = cp_marker.get('cp', '')
-        n_cp = cp_marker.get('n_clientes', 0)
-        if lat_cp is not None and lon_cp is not None and not (pd.isna(lat_cp) or pd.isna(lon_cp)):
-            popup_html = (
-                f"<b>Código Postal: {cp_val}</b><br>"
-                f"Clientes en este CP: {n_cp}"
-            )
-            folium.Marker(
-                location=[lat_cp, lon_cp],
-                icon=folium.Icon(color='red', icon='search', prefix='glyphicon'),
-                tooltip=f"📍 CP buscado: {cp_val}  ({n_cp} clientes)",
-                popup=folium.Popup(popup_html, max_width=220),
-            ).add_to(m)
-            if zona_sel == "Vista general":
-                m.fit_bounds([
-                    [lat_cp - 0.4, lon_cp - 0.4],
-                    [lat_cp + 0.4, lon_cp + 0.4],
-                ])
+    # Bloque desactivado temporalmente: se comenta para quitar la marca roja
+    # y el comportamiento de búsqueda por CP en el mapa.
+    # if cp_marker:
+    #     lat_cp = cp_marker.get('lat')
+    #     lon_cp = cp_marker.get('lon')
+    #     cp_val = cp_marker.get('cp', '')
+    #     n_cp = cp_marker.get('n_clientes', 0)
+    #     if lat_cp is not None and lon_cp is not None and not (pd.isna(lat_cp) or pd.isna(lon_cp)):
+    #         popup_html = (
+    #             f"<b>Código Postal: {cp_val}</b><br>"
+    #             f"Clientes en este CP: {n_cp}"
+    #         )
+    #         folium.Marker(
+    #             location=[lat_cp, lon_cp],
+    #             icon=folium.Icon(color='red', icon='search', prefix='glyphicon'),
+    #             tooltip=f"📍 CP buscado: {cp_val}  ({n_cp} clientes)",
+    #             popup=folium.Popup(popup_html, max_width=220),
+    #         ).add_to(m)
+    #         if zona_sel == "Vista general":
+    #             m.fit_bounds([
+    #                 [lat_cp - 0.4, lon_cp - 0.4],
+    #                 [lat_cp + 0.4, lon_cp + 0.4],
+    #             ])
 
     # Agregar botón de casa para "Vista general"
     HomeButtonControl(VISTA_CENTRO, VISTA_ZOOM, position='topleft').add_to(m)
@@ -2067,6 +2087,14 @@ def sync_gj_global_from_exact():
 def sync_zona_widget_unica():
     """Mantiene una sola zona seleccionada y conserva la mas reciente."""
     seleccionadas = st.session_state.get("zona_widget_multi", [])
+    opciones_zona = st.session_state.get("zona_widget_options", [])
+
+    # "Select all" del multiselect equivale a quitar filtro de zona.
+    if opciones_zona and len(seleccionadas) >= len(opciones_zona):
+        st.session_state["zona_widget_multi"] = []
+        st.session_state["zona_widget"] = "Vista general"
+        return
+
     if not seleccionadas:
         st.session_state["zona_widget"] = "Vista general"
         return
@@ -2253,13 +2281,13 @@ with st.sidebar:
         placeholder="Vista general",
         label_visibility="collapsed",
         on_change=sync_zona_widget_unica,
-        help="Solo permite 1 zona activa; al elegir otra, reemplaza automaticamente la anterior.",
+        help="Solo permite 1 zona activa; al elegir otra, reemplaza automaticamente la anterior. Si usas Select all, se aplica Vista general.",
     )
     if opciones_zona_filtrables and len(zonas_seleccionadas) >= len(opciones_zona_filtrables):
         st.session_state.zona_widget_multi = []
         st.session_state.zona_widget = "Vista general"
         zonas_seleccionadas = []
-    elif len(zonas_seleccionadas) > 1:
+    if len(zonas_seleccionadas) > 1:
         zona_activa = zonas_seleccionadas[-1]
         st.session_state.zona_widget_multi = [zona_activa]
         st.session_state.zona_widget = zona_activa
@@ -2544,7 +2572,10 @@ def render_salud_ciclo_vida(cfg):
 
         col_bajas_det, col_altas_det = st.columns(2)
         with col_bajas_det:
-            with st.expander(f"{cfg['expander_baja_title']} · {month_to_spanish_label(mes_historico)} ({len(bajas_mes_historico)})", expanded=True):
+            with st.expander(
+                f"{cfg['expander_baja_title']} · {month_to_spanish_label(mes_historico)} ({len(bajas_mes_historico)})",
+                expanded=True,
+            ):
                 if bajas_mes_historico.empty:
                     st.caption(cfg["expander_baja_empty"])
                 else:
@@ -2563,7 +2594,10 @@ def render_salud_ciclo_vida(cfg):
                         },
                     )
         with col_altas_det:
-            with st.expander(f"{cfg['expander_alta_title']} · {month_to_spanish_label(mes_historico)} ({len(altas_mes_historico)})", expanded=True):
+            with st.expander(
+                f"{cfg['expander_alta_title']} · {month_to_spanish_label(mes_historico)} ({len(altas_mes_historico)})",
+                expanded=True,
+            ):
                 if altas_mes_historico.empty:
                     st.caption(cfg["expander_alta_empty"])
                 else:
@@ -2867,77 +2901,72 @@ if seccion == "🗺️  Mapa":
         st.caption(f"Consumo: {nombre_consumo(col_sel)}")
 
         # ===== Buscador de Código Postal =====
-        # Se usa st.form para que la búsqueda solo dispare un rerun al presionar
-        # Enter o el botón Buscar, evitando reruns en cada tecla (que causaban
-        # que el mapa parpadeara / se deformara mientras se escribía).
-        with st.form(key="form_cp_busqueda", border=False):
-            col_cp_input, col_cp_btn = st.columns([0.75, 0.25])
-            with col_cp_input:
-                cp_input_val = st.text_input(
-                    "🔍 Buscar código postal",
-                    key="cp_busqueda_mapa_input",
-                    placeholder="Ej: 64000",
-                    max_chars=5,
-                    help="Escribe un código postal (5 dígitos) y presiona Buscar o Enter.",
-                    label_visibility="collapsed",
-                )
-            with col_cp_btn:
-                cp_submitted = st.form_submit_button("🔍 Buscar", use_container_width=True)
-
-        # Al enviar el formulario: resolver coordenadas y guardar en session_state.
-        if cp_submitted:
-            raw = cp_input_val.strip()
-            if raw.isdigit() and len(raw) <= 5:
-                cp_norm = raw.zfill(5)
-                geo_cp = _geocodificar_cps((cp_norm,))
-                lat_r = geo_cp['lat'].iloc[0] if not geo_cp.empty else None
-                lon_r = geo_cp['lon'].iloc[0] if not geo_cp.empty else None
-                if lat_r is not None and lon_r is not None and pd.notna(lat_r) and pd.notna(lon_r):
-                    n_cp = int((df_geo_seccion['cp_localizacion'].astype(str).str.zfill(5) == cp_norm).sum())
-                    st.session_state["cp_marker_result"] = {
-                        'lat': float(lat_r), 'lon': float(lon_r),
-                        'cp': cp_norm, 'n_clientes': n_cp,
-                    }
-                else:
-                    st.session_state["cp_marker_result"] = {'error': f"No se encontraron coordenadas para el CP **{raw}**."}
-            elif raw == "":
-                st.session_state.pop("cp_marker_result", None)
-            else:
-                st.session_state["cp_marker_result"] = {'error': "El código postal debe contener solo dígitos (máx. 5)."}
-
-        # Leer resultado persistido en session_state (sobrevive reruns del mapa).
-        cp_result = st.session_state.get("cp_marker_result")
+        # Bloque desactivado temporalmente: se comenta para ocultar el buscador
+        # y evitar que aparezca el texto "Ej: 64000" en la interfaz del mapa.
+        # with st.form(key="form_cp_busqueda", border=False):
+        #     col_cp_input, col_cp_btn = st.columns([0.75, 0.25])
+        #     with col_cp_input:
+        #         cp_input_val = st.text_input(
+        #             "🔍 Buscar código postal",
+        #             key="cp_busqueda_mapa_input",
+        #             placeholder="Ej: 64000",
+        #             max_chars=5,
+        #             help="Escribe un código postal (5 dígitos) y presiona Buscar o Enter.",
+        #             label_visibility="collapsed",
+        #         )
+        #     with col_cp_btn:
+        #         cp_submitted = st.form_submit_button("🔍 Buscar", use_container_width=True)
+        #
+        # if cp_submitted:
+        #     raw = cp_input_val.strip()
+        #     if raw.isdigit() and len(raw) <= 5:
+        #         cp_norm = raw.zfill(5)
+        #         geo_cp = _geocodificar_cps((cp_norm,))
+        #         lat_r = geo_cp['lat'].iloc[0] if not geo_cp.empty else None
+        #         lon_r = geo_cp['lon'].iloc[0] if not geo_cp.empty else None
+        #         if lat_r is not None and lon_r is not None and pd.notna(lat_r) and pd.notna(lon_r):
+        #             n_cp = int((df_geo_seccion['cp_localizacion'].astype(str).str.zfill(5) == cp_norm).sum())
+        #             st.session_state["cp_marker_result"] = {
+        #                 'lat': float(lat_r), 'lon': float(lon_r),
+        #                 'cp': cp_norm, 'n_clientes': n_cp,
+        #             }
+        #         else:
+        #             st.session_state["cp_marker_result"] = {'error': f"No se encontraron coordenadas para el CP **{raw}**."}
+        #     elif raw == "":
+        #         st.session_state.pop("cp_marker_result", None)
+        #     else:
+        #         st.session_state["cp_marker_result"] = {'error': "El código postal debe contener solo dígitos (máx. 5)."}
+        #
+        # cp_result = st.session_state.get("cp_marker_result")
         cp_marker_data = None
-
-        # Contenedor de ancho fijo para los resultados; siempre presente en el DOM
-        # para que el mapa no salte de posición cuando aparece o desaparece info.
-        with st.container():
-            if cp_result:
-                if 'error' in cp_result:
-                    st.warning(cp_result['error'])
-                else:
-                    cp_marker_data = cp_result
-                    n_cp = cp_result['n_clientes']
-                    cp_norm_show = cp_result['cp']
-                    col_cp_info, col_cp_table = st.columns([0.30, 0.70])
-                    with col_cp_info:
-                        st.success(f"CP **{cp_norm_show}** — {n_cp} cliente(s)")
-                    if n_cp > 0:
-                        df_cp = df_geo_seccion[
-                            df_geo_seccion['cp_localizacion'].astype(str).str.zfill(5) == cp_norm_show
-                        ][['id_instalacion', 'bp', 'zona', col_sel]].copy()
-                        df_cp[col_sel] = pd.to_numeric(df_cp[col_sel], errors='coerce').fillna(0)
-                        df_cp = df_cp.rename(columns={
-                            'id_instalacion': 'Instalación', 'bp': 'Cliente',
-                            'zona': 'Zona', col_sel: f'Consumo GJ',
-                        })
-                        with col_cp_table:
-                            st.dataframe(
-                                df_cp.sort_values('Consumo GJ', ascending=False),
-                                use_container_width=True,
-                                hide_index=True,
-                                height=min(180, 40 + 35 * len(df_cp)),
-                            )
+        #
+        # with st.container():
+        #     if cp_result:
+        #         if 'error' in cp_result:
+        #             st.warning(cp_result['error'])
+        #         else:
+        #             cp_marker_data = cp_result
+        #             n_cp = cp_result['n_clientes']
+        #             cp_norm_show = cp_result['cp']
+        #             col_cp_info, col_cp_table = st.columns([0.30, 0.70])
+        #             with col_cp_info:
+        #                 st.success(f"CP **{cp_norm_show}** — {n_cp} cliente(s)")
+        #             if n_cp > 0:
+        #                 df_cp = df_geo_seccion[
+        #                     df_geo_seccion['cp_localizacion'].astype(str).str.zfill(5) == cp_norm_show
+        #                 ][['id_instalacion', 'bp', 'zona', col_sel]].copy()
+        #                 df_cp[col_sel] = pd.to_numeric(df_cp[col_sel], errors='coerce').fillna(0)
+        #                 df_cp = df_cp.rename(columns={
+        #                     'id_instalacion': 'Instalación', 'bp': 'Cliente',
+        #                     'zona': 'Zona', col_sel: f'Consumo GJ',
+        #                 })
+        #                 with col_cp_table:
+        #                     st.dataframe(
+        #                         df_cp.sort_values('Consumo GJ', ascending=False),
+        #                         use_container_width=True,
+        #                         hide_index=True,
+        #                         height=min(180, 40 + 35 * len(df_cp)),
+        #                     )
 
         # El filtro de volumen (GJ) ya se aplicó de forma global sobre df_geo
         # antes de llegar a esta sección, por lo que aquí solo se copia.
@@ -2962,7 +2991,8 @@ if seccion == "🗺️  Mapa":
             # el mapa se renderice en blanco.
             m = crear_mapa(df_geo_mapa, col_sel, zona_sel,
                            datos_kml=datos_kml, carpetas_kml=carpetas_sel,
-                           cp_marker=cp_marker_data)
+                           # cp_marker=cp_marker_data  # buscador por CP desactivado
+                           )
 
             map_data = st_folium(
                 m,
@@ -3017,13 +3047,7 @@ if seccion == "🗺️  Mapa":
             st.markdown(f"**Zonas:** {leyenda}", unsafe_allow_html=True)
 
             st.markdown("**Consumo por zona**")
-            resumen_zona = (
-                df_geo_mapa.dropna(subset=['zona'])
-                .groupby('zona')
-                .agg(Clientes=('zona', 'size'), Consumo=(col_sel, 'sum'))
-                .reset_index()
-                .sort_values('Consumo', ascending=False)
-            )
+            resumen_zona = _resumen_zona_tabla(df_geo_mapa, col_sel)
             st.dataframe(
                 resumen_zona.rename(columns={'zona': 'Zona', 'Consumo': 'Consumo (GJ)'})
                 .style.format({'Consumo (GJ)': '{:,.0f}'}),
