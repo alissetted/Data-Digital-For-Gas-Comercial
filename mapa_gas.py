@@ -558,17 +558,17 @@ def _dialog_manage_columns(columnas_disponibles, columnas_default):
     st.divider()
     b_reset, b_cancel, b_save = st.columns(3)
     with b_reset:
-        if st.button("Reset to default", use_container_width=True, key="gestion_cols_reset"):
+        if st.button("Reset to default", width='stretch', key="gestion_cols_reset"):
             for c in columnas_disponibles:
                 st.session_state.pop(f"gestion_col_chk_{c}", None)
             st.session_state["gestion_columnas_draft"] = list(columnas_default)
             st.rerun()
     with b_cancel:
-        if st.button("Cancel", use_container_width=True, key="gestion_cols_cancel"):
+        if st.button("Cancel", width='stretch', key="gestion_cols_cancel"):
             st.session_state["mostrar_manage_columns"] = False
             st.rerun()
     with b_save:
-        if st.button("Save", type="primary", use_container_width=True, key="gestion_cols_save"):
+        if st.button("Save", type="primary", width='stretch', key="gestion_cols_save"):
             st.session_state["reporte_columnas_orden"] = list(draft)
             st.session_state["mostrar_manage_columns"] = False
             st.rerun()
@@ -1861,7 +1861,7 @@ with st.sidebar:
         st.caption("Sin consumo para aplicar filtro de GJ en el contexto actual.")
 
     st.markdown('<div class="engie-section">Datos</div>', unsafe_allow_html=True)
-    if st.button("🔄  Cargar / Actualizar datos", use_container_width=True):
+    if st.button("🔄  Cargar / Actualizar datos", width='stretch'):
         st.cache_data.clear()
 
 min_gj_global = int(st.session_state.get("min_gj_global", 0)) if max_gj_global > 0 else 0
@@ -1909,7 +1909,7 @@ if seccion == "🗺️  Mapa":
         capas_activas = sum(1 for c in capas if st.session_state.get(f"kml_{c}", False))
 
         with col_head_actions:
-            with st.popover("⚙️ Filtro(s)", help="Abrir panel maestro de mapa", use_container_width=True):
+            with st.popover("⚙️ Filtro(s)", help="Abrir panel maestro de mapa", width='stretch'):
                 st.markdown("**Visualización**")
                 col_sel = st.selectbox(
                     "Consumo a visualizar",
@@ -1925,12 +1925,12 @@ if seccion == "🗺️  Mapa":
 
                 col_accion_1, col_accion_2 = st.columns(2)
                 with col_accion_1:
-                    if st.button("Seleccionar todo", key="kml_todo", use_container_width=True):
+                    if st.button("Seleccionar todo", key="kml_todo", width='stretch'):
                         for capa in capas:
                             st.session_state[f"kml_{capa}"] = True
                         st.rerun()
                 with col_accion_2:
-                    if st.button("Deseleccionar todo", key="kml_nada", use_container_width=True):
+                    if st.button("Deseleccionar todo", key="kml_nada", width='stretch'):
                         for capa in capas:
                             st.session_state[f"kml_{capa}"] = False
                         st.rerun()
@@ -1964,7 +1964,7 @@ if seccion == "🗺️  Mapa":
                     label_visibility="collapsed",
                 )
             with col_cp_btn:
-                cp_submitted = st.form_submit_button("🔍 Buscar", use_container_width=True)
+                cp_submitted = st.form_submit_button("🔍 Buscar", width='stretch')
 
         # Al enviar el formulario: resolver coordenadas y guardar en session_state.
         if cp_submitted:
@@ -2016,7 +2016,7 @@ if seccion == "🗺️  Mapa":
                         with col_cp_table:
                             st.dataframe(
                                 df_cp.sort_values('Consumo (GJ)', ascending=False),
-                                use_container_width=True,
+                                width='stretch',
                                 hide_index=True,
                                 height=min(180, 40 + 35 * len(df_cp)),
                             )
@@ -2048,7 +2048,7 @@ if seccion == "🗺️  Mapa":
 
             map_data = st_folium(
                 m,
-                use_container_width=True,
+                width='stretch',
                 height=600,
                 key="mapa_zonas",
                 returned_objects=["last_object_clicked", "last_clicked"],
@@ -2294,7 +2294,7 @@ elif seccion == "📄  Reportes":
         with col_acciones:
             col_btn_manage, col_btn_export = st.columns(2)
             with col_btn_manage:
-                if st.button("🛠️ Manage Columns", key="btn_manage_columns", use_container_width=True):
+                if st.button("🛠️ Manage Columns", key="btn_manage_columns", width='stretch'):
                     for c in columnas_disponibles:
                         st.session_state.pop(f"gestion_col_chk_{c}", None)
                     st.session_state["gestion_columnas_draft"] = list(columnas_orden)
@@ -2310,12 +2310,12 @@ elif seccion == "📄  Reportes":
                         "reporte_personalizado.xlsx",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="dl_excel_reporte_header",
-                        use_container_width=True,
+                        width='stretch',
                     )
                     if export_clicked:
                         st.session_state["mostrar_manage_columns"] = False
                 else:
-                    st.button("Export", key="btn_export_disabled_header", disabled=True, use_container_width=True)
+                    st.button("Export", key="btn_export_disabled_header", disabled=True, width='stretch')
 
             if st.session_state.get("mostrar_manage_columns"):
                 _dialog_manage_columns(columnas_disponibles, columnas_default)
@@ -2338,7 +2338,7 @@ elif seccion == "📄  Reportes":
                 )
             st.dataframe(
                 df_reporte_final,
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 column_config=column_config_reporte,
             )
@@ -2428,7 +2428,7 @@ elif seccion == "📄  Reportes":
 
                 st.dataframe(
                     resumen_zona,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     column_config={
                         'Consumo_Total_Periodo_GJ': st.column_config.NumberColumn(
@@ -2704,11 +2704,11 @@ elif seccion == "📊  Dashboard":
                         plot_bgcolor='rgba(0,0,0,0)',
                         paper_bgcolor='rgba(0,0,0,0)',
                     )
-                    st.plotly_chart(fig_top10, use_container_width=True, config={"displayModeBar": False})
+                    st.plotly_chart(fig_top10, width='stretch', config={"displayModeBar": False})
 
                     st.dataframe(
                         top_fmt.style.format({'Consumo (GJ)': '{:,.0f}'}),
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                     
                     )
@@ -2808,7 +2808,7 @@ elif seccion == "📊  Dashboard":
                             plot_bgcolor='rgba(0,0,0,0)',
                             paper_bgcolor='rgba(0,0,0,0)',
                         )
-                        st.plotly_chart(fig_evol, use_container_width=True,
+                        st.plotly_chart(fig_evol, width='stretch',
                                         config={"displayModeBar": False},
                                         key=f"evol_{col}")
 
@@ -2840,7 +2840,7 @@ elif seccion == "📊  Dashboard":
                                 legend=dict(orientation="v", x=1.0, y=0.5),
                                 paper_bgcolor='rgba(0,0,0,0)',
                             )
-                            st.plotly_chart(fig_donut, use_container_width=True,
+                            st.plotly_chart(fig_donut, width='stretch',
                                             config={"displayModeBar": False},
                                             key=f"donut_{col}")
 
@@ -2874,7 +2874,7 @@ elif seccion == "📊  Dashboard":
                                 plot_bgcolor='rgba(0,0,0,0)',
                                 paper_bgcolor='rgba(0,0,0,0)',
                             )
-                            st.plotly_chart(fig_cli, use_container_width=True,
+                            st.plotly_chart(fig_cli, width='stretch',
                                             config={"displayModeBar": False},
                                             key=f"barzona_{col}")
 
@@ -3098,7 +3098,7 @@ elif seccion == "👛  Cartera":
                 paper_bgcolor="rgba(0,0,0,0)",
                 margin=dict(l=10, r=10, t=40, b=10),
             )
-            st.plotly_chart(fig_timeline, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig_timeline, width='stretch', config={"displayModeBar": False})
             if mes_ref_cartera:
                 st.caption(
                     f"El mes resaltado ({month_to_spanish_label(mes_ref_cartera)}) corresponde al periodo de consumo seleccionado arriba."
@@ -3139,7 +3139,7 @@ elif seccion == "👛  Cartera":
                             bajas_mes_historico[["razon_social", "zona", "fecha_baja_efectiva"]]
                             .rename(columns={"razon_social": "Cliente", "zona": "Zona", "fecha_baja_efectiva": "Fecha"})
                             .sort_values("Fecha"),
-                            use_container_width=True,
+                            width='stretch',
                             hide_index=True,
                             column_config={"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY")},
                         )
@@ -3152,7 +3152,7 @@ elif seccion == "👛  Cartera":
                             altas_mes_historico[["razon_social", "zona", "fecha_pes_efectiva"]]
                             .rename(columns={"razon_social": "Cliente", "zona": "Zona", "fecha_pes_efectiva": "Fecha"})
                             .sort_values("Fecha"),
-                            use_container_width=True,
+                            width='stretch',
                             hide_index=True,
                             column_config={"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY")},
                         )
@@ -3245,7 +3245,7 @@ elif seccion == "👛  Cartera":
                     "dias_restantes": "Días restantes", "renovacion": "Renovación",
                     "riesgo_vencimiento": "Riesgo de vencimiento",
                 }),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 height=min(400, 44 + 35 * len(alertas)),
                 column_config={
