@@ -866,8 +866,7 @@ def generar_pdf_reporte(df, titulo="Reporte", max_filas=500):
     """Genera un PDF tabular (apaisado) a partir de un DataFrame.
     Trunca a `max_filas` para evitar PDFs excesivamente grandes o lentos."""
     df_pdf = df.head(max_filas).copy()
-    for col in df_pdf.columns:
-        df_pdf[col] = df_pdf[col].apply(lambda v: "" if pd.isna(v) else str(v))
+    df_pdf = df_pdf.mask(df_pdf.isna(), "").astype(str)
 
     columnas = list(df_pdf.columns)
 
@@ -904,13 +903,13 @@ def generar_pdf_reporte(df, titulo="Reporte", max_filas=500):
 
     _ = pdf.set_font("Helvetica", "", 6.5)
     _ = pdf.set_text_color(0, 0, 0)
-    for i, (_indice_fila, fila) in enumerate(df_pdf.iterrows()):
+    for i, fila in enumerate(df_pdf.itertuples(index=False, name=None)):
         if i % 2 == 0:
             _ = pdf.set_fill_color(245, 248, 250)
         else:
             _ = pdf.set_fill_color(255, 255, 255)
-        for col in columnas:
-            _ = pdf.cell(ancho_col, alto_fila, _texto_seguro(fila[col]), border=1, fill=True)
+        for valor in fila:
+            _ = pdf.cell(ancho_col, alto_fila, _texto_seguro(valor), border=1, fill=True)
         _ = pdf.ln(alto_fila)
 
     if len(df) > max_filas:
@@ -2404,18 +2403,9 @@ with st.sidebar:
 
     st.markdown('<div class="engie-section">Filtro de volumen</div>', unsafe_allow_html=True)
     #st.caption("Aplica a Mapa, Reportes y Top 10 según el consumo total del periodo.")
-    zona_sel_global = st.session_state.get("zona_widget", "Vista general")
-    if not df_geo.empty and 'Consumo_Total_Periodo_GJ' in df_geo.columns:
-        serie_gj = pd.to_numeric(df_geo['Consumo_Total_Periodo_GJ'], errors='coerce').fillna(0)
-        if zona_sel_global != "Vista general" and 'zona' in df_geo.columns:
-            zona_norm = normalizar_zona_clave(zona_sel_global)
-            zona_mask = normalizar_zona_clave_serie(df_geo['zona']) == zona_norm
-            serie_gj = pd.to_numeric(df_geo.loc[zona_mask, 'Consumo_Total_Periodo_GJ'], errors='coerce').fillna(0)
-        if len(serie_gj) > 0:
-            max_gj_global = int(serie_gj.max())
-            max_gj_global_ui, slider_step_gj = _calcular_limite_slider_gj(serie_gj)
-    st.session_state["max_gj_global"] = max_gj_global_ui if max_gj_global_ui > 0 else max_gj_global
-
+    # max_gj_global / max_gj_global_ui / slider_step_gj ya se calcularon arriba
+    # (antes de abrir el sidebar) con la misma zona activa; evitamos repetir
+    # el filtrado + cálculo de cuantiles sobre df_geo.
     if max_gj_global > 0:
         slider_max = max_gj_global_ui if max_gj_global_ui > 0 else max_gj_global
         valor_actual = int(st.session_state.get("min_gj_global_slider", 0))
@@ -2462,8 +2452,11 @@ ui_max_gj = max_gj_global_ui if max_gj_global_ui > 0 else max_gj_global
 if max_gj_global > 0:
     min_gj_global = max(0, min(min_gj_global, ui_max_gj))
 
-# Guardar df_geo sin el filtro de GJ para los graficos de distribucion por zona
-df_geo_todas_zonas = df_geo.copy()
+# Guardar df_geo sin el filtro de GJ para los graficos de distribucion por zona.
+# Solo se necesitan 'zona' + las columnas de consumo (no todo el dataframe),
+# lo que evita copiar decenas de columnas irrelevantes para estos gráficos.
+_cols_todas_zonas = list(dict.fromkeys(['zona', 'Consumo_Total_Periodo_GJ'] + list(cols_consumo)))
+df_geo_todas_zonas = df_geo[[c for c in _cols_todas_zonas if c in df_geo.columns]].copy()
 
 if min_gj_global > 0 and not df_geo.empty:
     df_geo = df_geo[
