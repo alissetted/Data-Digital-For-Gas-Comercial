@@ -1512,6 +1512,32 @@ def bounds_zona(name):
     return [[miny, minx], [maxy, maxx]]
 
 
+def mascara_filtro_cliente_instalacion(df: pd.DataFrame, texto: str) -> pd.Series:
+    """Máscara booleana que busca `texto` (sin distinguir mayúsculas/acentos)
+    en id_instalacion y en TODAS las columnas de nombre de cliente disponibles
+    ('bp' y 'razon_social'), no solo en una. Esto evita falsos "sin resultados"
+    cuando una columna existe pero está vacía para ese registro y el nombre
+    real está en la otra columna."""
+    texto_norm = (
+        unicodedata.normalize('NFKD', str(texto))
+        .encode('ascii', 'ignore')
+        .decode('ascii')
+        .strip()
+        .lower()
+    )
+    mascara = pd.Series(False, index=df.index)
+    if 'id_instalacion' in df.columns:
+        mascara = mascara | df['id_instalacion'].astype(str).str.contains(texto_norm, case=False, na=False, regex=False)
+    for col in ('bp', 'razon_social'):
+        if col in df.columns:
+            col_norm = (
+                df[col].astype(str)
+                .map(lambda v: unicodedata.normalize('NFKD', v).encode('ascii', 'ignore').decode('ascii').lower())
+            )
+            mascara = mascara | col_norm.str.contains(texto_norm, na=False, regex=False)
+    return mascara
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _resumen_zona_tabla(df, col_consumo):
     """Tabla 'Consumo por zona' de la secci\u00f3n Mapa, cacheada por (df, col_consumo).
@@ -3240,15 +3266,13 @@ elif seccion == "📄  Reportes":
     periodicidad_reporte = st.session_state.get("reporte_periodicidad", "Mensual")
 
     filtro_clientes = st.text_input(
-        "Filtrar por Id de Instalación",
+        "Filtrar por Cliente o Id de Instalación",
         key="filtro_instalacion_clientes",
-        placeholder="Ej: 600601101",
+        placeholder="Ej: Alpezzi Chocolate o 600601101",
     )
     df_mostrar_seccion = df_mostrar
     if filtro_clientes:
-        df_mostrar_seccion = df_mostrar[
-            df_mostrar['id_instalacion'].astype(str).str.contains(filtro_clientes, case=False, na=False)
-        ]
+        df_mostrar_seccion = df_mostrar[mascara_filtro_cliente_instalacion(df_mostrar, filtro_clientes)]
 
     # Reportes usa el dataset de negocio (df_mostrar) para no depender de la
     # geocodificación (df_geo). Asi, el filtro de zona funciona incluso cuando
@@ -3397,12 +3421,10 @@ elif seccion == "📄  Reportes":
                 spread_vol_num * pct_zona_num,
             )
 
-        # Aplicar filtro de Id de Instalación solo para visualización
+        # Aplicar filtro de Cliente/Id de Instalación solo para visualización
         # (los cálculos de % zona y spreads ya fueron hechos sobre datos completos)
         if filtro_clientes:
-            df_reporte = df_reporte[
-                df_reporte['id_instalacion'].astype(str).str.contains(filtro_clientes, case=False, na=False)
-            ]
+            df_reporte = df_reporte[mascara_filtro_cliente_instalacion(df_reporte, filtro_clientes)]
 
         # --- 4) Vista previa ---
         df_reporte_final = None
@@ -3647,9 +3669,9 @@ elif seccion == "📊  Dashboard":
 
         # Filtro global de instalación antes de las pestañas
         filtro_top10_global = st.text_input(
-            "Filtrar por Id de Instalación",
+            "Filtrar por Cliente o Id de Instalación",
             key="filtro_instalacion_top10_global",
-            placeholder="Ej: 600601101",
+            placeholder="Ej: Alpezzi Chocolate o 600601101",
         )
 
         subtabs = st.tabs([nombre_tab_consumo(c) for c in cols_consumo])
@@ -3705,9 +3727,7 @@ elif seccion == "📊  Dashboard":
 
                 df_geo_top10_local = base_top
                 if filtro_top10_global and not base_top.empty:
-                    df_geo_top10_local = base_top[
-                        base_top['id_instalacion'].astype(str).str.contains(filtro_top10_global, case=False, na=False)
-                    ]
+                    df_geo_top10_local = base_top[mascara_filtro_cliente_instalacion(base_top, filtro_top10_global)]
 
                 # Usar 'bp' si existe, si no usar 'razon_social'
                 col_nombre = 'bp' if 'bp' in df_geo_top10_local.columns else 'razon_social'
