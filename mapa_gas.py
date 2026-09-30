@@ -1190,7 +1190,9 @@ def get_connection():
 
 
 # --- Carga de datos con caché ---
-@st.cache_data(ttl=3600)
+# cache_resource: devuelve el MISMO objeto en cada rerun (sin copiar/deserializar
+# los DataFrames grandes cada vez). Los consumidores no lo mutan in place.
+@st.cache_resource(ttl=3600, show_spinner=False)
 def cargar_datos():
     """Devuelve (df_clientes, df_consumo_diario).
 
@@ -1307,6 +1309,16 @@ def cargar_datos_garantias():
     return df
 
 
+def _filtrar_rango_fechas(con, fecha_ini, fecha_fin):
+    """Filtra el detalle diario por [fecha_ini, fecha_fin] (inclusive) comparando
+    datetime64 directamente (evita `.dt.date`, que crea un objeto Python por fila)."""
+    if fecha_ini is None or fecha_fin is None:
+        return con
+    ini = pd.Timestamp(fecha_ini)
+    fin = pd.Timestamp(fecha_fin) + pd.Timedelta(days=1)
+    return con[(con['fecha'] >= ini) & (con['fecha'] < fin)]
+
+
 def construir_consumo_mensual(df_consumo_diario, fecha_ini=None, fecha_fin=None):
     """Agrega el detalle diario de consumo a columnas mensuales
     'Consumo_AAAA_MM_GJ', una fila por id_instalacion.
@@ -1318,22 +1330,16 @@ def construir_consumo_mensual(df_consumo_diario, fecha_ini=None, fecha_fin=None)
     if con.empty:
         return pd.DataFrame(columns=['id_instalacion'])
 
-    if fecha_ini is not None and fecha_fin is not None:
-        con = con[
-            (con['fecha'].dt.date >= fecha_ini) & (con['fecha'].dt.date <= fecha_fin)
-        ]
+    con = _filtrar_rango_fechas(con, fecha_ini, fecha_fin)
     if con.empty:
         return pd.DataFrame(columns=['id_instalacion'])
 
-    con = con.copy()
-    con['periodo'] = con['fecha'].dt.strftime('%Y_%m')
-    mensual = (
-        con.pivot_table(index='id_instalacion', columns='periodo',
-                        values='consumo_gj', aggfunc='sum')
-           .rename(columns=lambda c: f'Consumo_{c}_GJ')
-           .reset_index()
-    )
-    return mensual
+    # Clave entera AAAAMM (barata de agrupar); los nombres de columna se
+    # formatean solo una vez por periodo único, no por fila.
+    clave = (con['fecha'].dt.year * 100 + con['fecha'].dt.month).rename('periodo')
+    mensual = con.groupby(['id_instalacion', clave])['consumo_gj'].sum().unstack()
+    mensual.columns = [f'Consumo_{int(c) // 100:04d}_{int(c) % 100:02d}_GJ' for c in mensual.columns]
+    return mensual.reset_index()
 
 
 def sumar_consumo_periodo(df_consumo_diario, fecha_ini=None, fecha_fin=None):
@@ -1344,10 +1350,7 @@ def sumar_consumo_periodo(df_consumo_diario, fecha_ini=None, fecha_fin=None):
     if con.empty:
         return pd.Series(name='Consumo_Total_Periodo_GJ', dtype='float64')
 
-    if fecha_ini is not None and fecha_fin is not None:
-        con = con[
-            (con['fecha'].dt.date >= fecha_ini) & (con['fecha'].dt.date <= fecha_fin)
-        ]
+    con = _filtrar_rango_fechas(con, fecha_ini, fecha_fin)
     return con.groupby('id_instalacion')['consumo_gj'].sum().rename('Consumo_Total_Periodo_GJ')
 
 
@@ -1428,7 +1431,7 @@ def aplicar_jitter(df, radio=0.02):
     return df
 
 
-@st.cache_data(ttl=86400)
+@st.cache_resource
 def _polys():
     return {name: Polygon(coords) for name, coords in ZONAS.items()}
 
@@ -1532,7 +1535,10 @@ def mascara_filtro_cliente_instalacion(df: pd.DataFrame, texto: str) -> pd.Serie
         if col in df.columns:
             col_norm = (
                 df[col].astype(str)
-                .map(lambda v: unicodedata.normalize('NFKD', v).encode('ascii', 'ignore').decode('ascii').lower())
+                .str.normalize('NFKD')
+                .str.encode('ascii', 'ignore')
+                .str.decode('ascii')
+                .str.lower()
             )
             mascara = mascara | col_norm.str.contains(texto_norm, na=False, regex=False)
     return mascara
@@ -2472,6 +2478,7 @@ with st.sidebar:
     st.markdown('<div class="engie-section">Datos</div>', unsafe_allow_html=True)
     if st.button("🔄  Cargar / Actualizar datos", use_container_width=True):
         st.cache_data.clear()
+        cargar_datos.clear()
 
 min_gj_global = int(st.session_state.get("min_gj_global", 0)) if max_gj_global > 0 else 0
 ui_max_gj = max_gj_global_ui if max_gj_global_ui > 0 else max_gj_global
@@ -3891,13 +3898,13 @@ elif seccion == "📊  Dashboard":
                         ),
                         text=top_chart['Consumo (GJ)'].apply(lambda v: f"{v:,.0f}"),
                         textposition='outside',
-                        textfont=dict(size=11, color='#1F2937'),
+                        textfont=dict(size=10, color='#1F2937'),
                         hovertext=hovertext,
                         hoverinfo='text',
                     ))
                     fig_top10.update_layout(
                         height=max(300, 44 * n_bars),
-                        margin=dict(l=10, r=60, t=10, b=10),
+                        margin=dict(l=10, r=200, t=10, b=10),
                         xaxis=dict(
                             title='Consumo (GJ)',
                             showgrid=True,
