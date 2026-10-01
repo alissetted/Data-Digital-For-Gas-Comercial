@@ -1614,6 +1614,20 @@ def _png_desde_fig_json(fig_json: str) -> bytes:
     return pio.from_json(fig_json).to_image(format="png")
 
 
+def _excel_bytes_desde_hojas(hojas: dict[str, pd.DataFrame]) -> bytes:
+    """Construye un archivo Excel en memoria con una hoja por DataFrame."""
+    buffer = BytesIO()
+    with pd.ExcelWriter(
+        buffer,
+        engine='xlsxwriter',
+        date_format='dd/mm/yyyy',
+        datetime_format='dd/mm/yyyy',
+    ) as writer:
+        for nombre_hoja, df_hoja in hojas.items():
+            df_hoja.to_excel(writer, index=False, sheet_name=nombre_hoja[:31])
+    return buffer.getvalue()
+
+
 class HomeButtonControl(MacroElement):
     _template = Template("""
     {% macro script(this, kwargs) %}
@@ -4153,6 +4167,16 @@ elif seccion == "📊  Dashboard":
                         )
                         st.caption(f"Consumo diario total {zona_txt} - {nombre_consumo(col)}")
                         st.line_chart(tendencia_total, color="#007BC5")
+                        datos_total_descarga = tendencia_total.rename('Consumo_GJ').reset_index()
+                        datos_total_descarga.columns = ['Fecha', 'Consumo_GJ']
+                        st.download_button(
+                            "Descargar datos del consumo diario",
+                            _excel_bytes_desde_hojas({'Tendencia_total': datos_total_descarga}),
+                            "tendencia_diaria_consumo.xlsx",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_tendencia_total_{col}",
+                            use_container_width=False,
+                        )
 
                         top_lideres = top['bp'].dropna().head(5).tolist()
                         top_ids = (
@@ -4170,6 +4194,15 @@ elif seccion == "📊  Dashboard":
                             )
                             st.caption("Tendencia diaria de los 5 clientes líderes del periodo")
                             st.line_chart(tendencia_clientes)
+                            datos_lideres_descarga = tendencia_clientes.reset_index().rename(columns={'fecha': 'Fecha'})
+                            st.download_button(
+                                "Descargar datos de los 5 clientes líderes",
+                                _excel_bytes_desde_hojas({'Top_5_lideres': datos_lideres_descarga}),
+                                "tendencia_diaria_top_5_clientes.xlsx",
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"dl_tendencia_lideres_{col}",
+                                use_container_width=False,
+                            )
     elif cols_consumo and df_geo.empty:
         st.info("No hay coordenadas para calcular el Top 10 por zona.")
     elif cols_consumo:
