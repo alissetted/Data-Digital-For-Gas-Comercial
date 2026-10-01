@@ -1,6 +1,4 @@
-﻿# Clientes activos en Streamlit con mapa de zonas de Gas Natural (paleta ENGIE)
-
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 import numpy as np
 import pyodbc
@@ -24,6 +22,7 @@ from datetime import date, datetime
 import plotly.graph_objects as go
 import plotly.io as pio
 from fpdf import FPDF
+from pandas.io.formats.style import Styler
 from streamlit_sortables import sort_items
 
 st.set_page_config(page_title="Clientes Activos y Consumos Anuales", layout="wide")
@@ -357,6 +356,11 @@ st.markdown(
 st.markdown(
     """
 <style>
+    :root {
+        --engie-table-head-bg: #002D72;
+        --engie-table-head-text: #FFFFFF;
+    }
+
     /* Etiqueta del filtro (arriba del campo) */
     div[data-testid="stDateInput"] label {
         font-size: 0.72rem;
@@ -423,24 +427,242 @@ st.markdown(
         border-radius: 999px !important;
     }
     /* ===== Tablas: contenedor tipo tarjeta ENGIE ===== */
-    div[data-testid="stDataFrame"] {
+    div[data-testid="stDataFrame"],
+    .engie-dataframe-wrapper {
         border-radius: 14px !important;
         border: 1.5px solid #D7E4F3 !important;
         box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06) !important;
         overflow: hidden !important;
         background: #FFFFFF !important;
     }
-    div[data-testid="stDataFrame"]::before {
-        content: "";
-        display: block;
-        height: 3px;
-        background: linear-gradient(90deg, #0077CC 0%, #003C88 100%);
-        border-radius: 14px 14px 0 0;
+    .engie-dataframe-scroll {
+        overflow: auto;
+        width: 100%;
+    }
+    .engie-dataframe-wrapper table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.95rem;
+    }
+    .engie-dataframe-wrapper thead th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: var(--engie-table-head-bg) !important;
+        color: var(--engie-table-head-text) !important;
+        font-weight: 700;
+        border-bottom: 1px solid #D7E4F3;
+    }
+    .engie-dataframe-wrapper thead th *,
+    .engie-dataframe-wrapper thead td * {
+        color: var(--engie-table-head-text) !important;
+    }
+    .engie-dataframe-wrapper tbody td,
+    .engie-dataframe-wrapper tbody th {
+        background: #FFFFFF;
+        color: #1F2937;
+    }
+    .engie-dataframe-wrapper th,
+    .engie-dataframe-wrapper td {
+        padding: 0.34rem 0.75rem;
+        border-right: 1px solid #E5EDF6;
+        border-bottom: 1px solid #E5EDF6;
+        white-space: nowrap;
+        text-align: left;
+        vertical-align: middle;
+    }
+    .engie-dataframe-wrapper tr:last-child td,
+    .engie-dataframe-wrapper tr:last-child th {
+        border-bottom: none;
+    }
+    .engie-dataframe-wrapper th:last-child,
+    .engie-dataframe-wrapper td:last-child {
+        border-right: none;
+    }
+    div[data-testid="stTable"] table thead th,
+    div[data-testid="stTable"] table thead td,
+    div[data-testid="stMarkdownContainer"] table thead th,
+    div[data-testid="stMarkdownContainer"] table thead td,
+    table thead th,
+    table thead td {
+        background: var(--engie-table-head-bg) !important;
+        color: var(--engie-table-head-text) !important;
+    }
+    div[data-testid="stTable"] table thead th *,
+    div[data-testid="stTable"] table thead td *,
+    div[data-testid="stMarkdownContainer"] table thead th *,
+    div[data-testid="stMarkdownContainer"] table thead td *,
+    table thead th *,
+    table thead td * {
+        color: var(--engie-table-head-text) !important;
     }
 </style>
 """,
     unsafe_allow_html=True,
 )
+
+_STREAMLIT_DATAFRAME = st.dataframe
+
+
+def _engie_table_styles():
+    return [
+        {
+            "selector": "thead th",
+            "props": [
+                ("background-color", "var(--engie-table-head-bg)"),
+                ("color", "var(--engie-table-head-text)"),
+                ("font-weight", "700"),
+            ],
+        },
+        {
+            "selector": "tbody td",
+            "props": [("color", "#1F2937")],
+        },
+        {
+            "selector": "tbody th",
+            "props": [("color", "#1F2937")],
+        },
+    ]
+
+
+def _python_date_format(streamlit_fmt):
+    formatos = {
+        "DD/MM/YYYY": "%d/%m/%Y",
+        "D/M/YYYY": "%-d/%-m/%Y" if os.name != "nt" else "%#d/%#m/%Y",
+    }
+    return formatos.get(streamlit_fmt, "%d/%m/%Y")
+
+
+def _format_number_value(valor, patron):
+    if pd.isna(valor):
+        return ""
+    if not patron or "%" not in patron:
+        return str(valor)
+
+    coincidencia = re.match(r"^(?P<prefix>[^%]*?)%(?P<comma>,)?(?:\.(?P<precision>\d+))?(?P<kind>[df])(?P<suffix>.*)$", patron)
+    if not coincidencia:
+        return str(valor)
+
+    prefix = coincidencia.group("prefix") or ""
+    suffix = coincidencia.group("suffix") or ""
+    usar_coma = bool(coincidencia.group("comma"))
+    precision = int(coincidencia.group("precision") or 0)
+    tipo = coincidencia.group("kind")
+
+    if tipo == "d":
+        numero = int(round(float(valor)))
+        cuerpo = f"{numero:,d}" if usar_coma else f"{numero:d}"
+    else:
+        spec = "," if usar_coma else ""
+        cuerpo = format(float(valor), f"{spec}.{precision}f")
+    return f"{prefix}{cuerpo}{suffix}"
+
+
+def _apply_column_config_to_dataframe(df, column_config):
+    if not column_config:
+        return df
+
+    resultado = df.copy()
+    renombres = {}
+    for columna, config in column_config.items():
+        if columna not in resultado.columns or not isinstance(config, dict):
+            continue
+
+        etiqueta = config.get("label")
+        if etiqueta and etiqueta != columna:
+            renombres[columna] = etiqueta
+
+        type_config = config.get("type_config") or {}
+        tipo = type_config.get("type")
+        if tipo == "date":
+            fmt = _python_date_format(type_config.get("format"))
+            serie = pd.to_datetime(resultado[columna], errors="coerce")
+            resultado[columna] = serie.map(lambda v: v.strftime(fmt) if pd.notna(v) else "")
+        elif tipo == "number":
+            patron = type_config.get("format")
+            serie = pd.to_numeric(resultado[columna], errors="coerce")
+            resultado[columna] = serie.map(lambda v: _format_number_value(v, patron) if pd.notna(v) else "")
+
+    if renombres:
+        resultado = resultado.rename(columns=renombres)
+    return resultado
+
+
+def _engie_dataframe_html(data, hide_index=False, column_config=None):
+    if isinstance(data, Styler):
+        styler = data.set_table_styles(_engie_table_styles(), overwrite=False)
+        if hide_index:
+            styler = styler.hide(axis="index")
+        return styler.to_html(classes="engie-dataframe-table")
+
+    dataframe = data.copy() if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+    dataframe = _apply_column_config_to_dataframe(dataframe, column_config)
+    styler = dataframe.style.set_table_styles(_engie_table_styles(), overwrite=False)
+    styler = styler.format(na_rep="")
+    if hide_index:
+        styler = styler.hide(axis="index")
+    return styler.to_html(classes="engie-dataframe-table")
+
+
+def _engie_dataframe_height(height, data):
+    if isinstance(height, int):
+        return max(height, 120)
+    if height in ("stretch", "content"):
+        return None
+
+    cantidad_filas = 0
+    if isinstance(data, Styler):
+        cantidad_filas = len(data.data.index)
+    elif isinstance(data, pd.DataFrame):
+        cantidad_filas = len(data.index)
+    else:
+        try:
+            cantidad_filas = len(data)
+        except TypeError:
+            cantidad_filas = 0
+
+    filas_visibles = min(max(cantidad_filas, 1), 15)
+    alto_header = 28
+    alto_fila = 28
+    padding = 2
+    return alto_header + filas_visibles * alto_fila + padding
+
+
+def engie_dataframe(
+    data=None,
+    width="stretch",
+    height="auto",
+    *,
+    use_container_width=None,
+    hide_index=None,
+    column_config=None,
+    **kwargs,
+):
+    if any(clave in kwargs for clave in ("on_select", "selection_mode", "selection_default")):
+        return _STREAMLIT_DATAFRAME(
+            data,
+            width=width,
+            height=height,
+            use_container_width=use_container_width,
+            hide_index=hide_index,
+            column_config=column_config,
+            **kwargs,
+        )
+
+    computed_height = _engie_dataframe_height(height, data)
+    max_height = f"max-height:{computed_height}px;" if computed_height else ""
+    wrapper_style = "width:100%;"
+    scroll_style = f"width:100%;overflow:auto;{max_height}"
+    html = _engie_dataframe_html(data, hide_index=bool(hide_index), column_config=column_config)
+    st.markdown(
+        f"<div class='engie-dataframe-wrapper' style='{wrapper_style}'><div class='engie-dataframe-scroll' style='{scroll_style}'>{html}</div></div>",
+        unsafe_allow_html=True,
+    )
+    return None
+
+
+st.dataframe = engie_dataframe
 
 # Umbral: por encima de este nº de clientes en una zona se usa clustering
 # para evitar dibujar miles de marcadores individuales.
@@ -2569,18 +2791,33 @@ def render_salud_ciclo_vida(cfg):
     else:
         base_df = cfg["data_loader"]()
 
-    # --- Filtro por zona/LDC (conserva el mismo selectbox de siempre) ---
-    opciones_filtro = [cfg["selector_placeholder"]] + cfg["selector_options_fn"](base_df)
-    valor_filtro = st.selectbox(
-        cfg["selector_label"],
-        opciones_filtro,
-        key=cfg["selector_key"],
-    )
-
-    if valor_filtro != cfg["selector_placeholder"]:
-        ciclo_base = base_df[base_df[cfg["filter_column"]] == valor_filtro].copy()
+    # --- Filtro por zona/LDC ---
+    # Cartera reutiliza el filtro de Zona del sidebar (zona_widget) en lugar de
+    # duplicar un selector local, para evitar filtros redundantes y mantener
+    # consistencia de navegación entre todos los componentes de la pestaña.
+    # Garantías conserva su propio selectbox (LDC), que no tiene equivalente
+    # en la barra lateral.
+    if cfg.get("usa_filtro_zona_sidebar"):
+        zona_sidebar = st.session_state.get("zona_widget", "Vista general")
+        if zona_sidebar != "Vista general" and cfg["filter_column"] in base_df.columns:
+            zona_norm = normalizar_zona_clave(zona_sidebar)
+            ciclo_base = base_df[
+                normalizar_zona_clave_serie(base_df[cfg["filter_column"]]) == zona_norm
+            ].copy()
+        else:
+            ciclo_base = base_df.copy()
     else:
-        ciclo_base = base_df.copy()
+        opciones_filtro = [cfg["selector_placeholder"]] + cfg["selector_options_fn"](base_df)
+        valor_filtro = st.selectbox(
+            cfg["selector_label"],
+            opciones_filtro,
+            key=cfg["selector_key"],
+        )
+
+        if valor_filtro != cfg["selector_placeholder"]:
+            ciclo_base = base_df[base_df[cfg["filter_column"]] == valor_filtro].copy()
+        else:
+            ciclo_base = base_df.copy()
 
     if ciclo_base.empty:
         st.info(cfg["empty_base_msg"])
@@ -2756,6 +2993,7 @@ def render_salud_ciclo_vida(cfg):
                         .sort_values("Fecha"),
                         use_container_width=True,
                         hide_index=True,
+                        height="content",
                         column_config={
                             "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
                         },
@@ -2778,6 +3016,7 @@ def render_salud_ciclo_vida(cfg):
                         .sort_values("Fecha"),
                         use_container_width=True,
                         hide_index=True,
+                        height="content",
                         column_config={
                             "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
                         },
@@ -2952,10 +3191,7 @@ CARTERA_CONFIG = {
     ),
     "data_loader": lambda: resultado_todos_status,
     "spinner_msg": None,
-    "selector_label": "Zona para análisis de cartera",
-    "selector_placeholder": "Todas las zonas",
-    "selector_options_fn": lambda df: list(ZONAS.keys()),
-    "selector_key": "zona_cartera",
+    "usa_filtro_zona_sidebar": True,
     "filter_column": "zona",
     "empty_base_msg": "No hay datos base para el análisis de status de clientes.",
     "status_column": "status",
@@ -3275,6 +3511,7 @@ if seccion == "🗺️  Mapa":
                 .style.format({'Consumo (GJ)': '{:,.0f}'}),
                 use_container_width=True,
                 hide_index=True,
+                height="content",
             )
 
 
@@ -3573,6 +3810,7 @@ elif seccion == "📄  Reportes":
                     resumen_zona,
                     use_container_width=True,
                     hide_index=True,
+                    height="content",
                     column_config={
                         'Consumo_Total_Periodo_GJ': st.column_config.NumberColumn(
                             'Consumo_Total_Periodo_GJ', format='%,.0f GJ'
