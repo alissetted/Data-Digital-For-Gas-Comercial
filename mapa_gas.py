@@ -347,6 +347,122 @@ st.markdown(
         color: #6B7280;
         line-height: 1.25;
     }
+    section[data-testid="stSidebar"] {
+        min-width: 282px;
+        max-width: 282px;
+        padding: 0 0.85rem 1rem 0.85rem;
+    }
+    section[data-testid="stSidebar"] > div {
+        padding-top: 0.15rem;
+    }
+    section[data-testid="stSidebar"][aria-expanded="false"] {
+        min-width: 0 !important;
+        max-width: 0 !important;
+        width: 0 !important;
+        padding: 0 !important;
+        border-right: none !important;
+        overflow: hidden !important;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_brand_block"] {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+        padding-top: 0;
+        padding-bottom: 0.15rem;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_brand_block"] div[data-testid="stImage"] {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+        margin: 0;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_brand_block"] .engie-sub {
+        margin-bottom: 0.35rem;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_shell"] {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        width: 100%;
+        margin: 0.35rem 0 0.1rem;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"] {
+        width: 100%;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"] div[data-testid="stButton"] > button {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        width: 100% !important;
+        min-height: 44px !important;
+        height: 44px !important;
+        padding: 0 0.9rem !important;
+        border: none !important;
+        border-radius: 10px !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        color: #F4F8FB !important;
+        font-weight: 500 !important;
+        text-align: left !important;
+        transition: background 0.18s ease;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"] div[data-testid="stButton"] > button:hover {
+        background: rgba(255, 255, 255, 0.1) !important;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"] div[data-testid="stButton"] > button:focus,
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"] div[data-testid="stButton"] > button:focus-visible {
+        outline: none !important;
+        box-shadow: none !important;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"][class*="_active"] div[data-testid="stButton"] > button {
+        background: rgba(148, 217, 238, 0.16) !important;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"] div[data-testid="stButton"] > button p {
+        width: 100%;
+        margin: 0;
+        overflow: hidden;
+        font-size: 0.95rem;
+        line-height: 1.2;
+        text-align: left;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"] div[data-testid="stButton"] > button > div,
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"] div[data-testid="stButton"] > button span {
+        display: flex !important;
+        justify-content: flex-start !important;
+        width: 100% !important;
+        text-align: left !important;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"] div[data-testid="stButton"] > button * {
+        color: #F4F8FB !important;
+        fill: #F4F8FB !important;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_nav_item_"][class*="_active"] div[data-testid="stButton"] > button * {
+        color: #FFFFFF !important;
+        fill: #FFFFFF !important;
+        font-weight: 700 !important;
+    }
+    section[data-testid="stSidebar"] .engie-section {
+        margin: 16px 0 6px 6px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+    }
+    section[data-testid="stSidebar"] .engie-nav-section {
+        margin-top: 4px;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_period_section"] .engie-section {
+        margin-top: 4px;
+    }
+    section[data-testid="stSidebar"] .stDivider {
+        margin: 0.1rem 0 0.2rem;
+        opacity: 0.5;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -2474,19 +2590,35 @@ def sync_zona_widget_unica():
 # --- Interfaz ---
 
 # ===== SIDEBAR DE NAVEGACIÓN =====
+SECCIONES_SIDEBAR = ["Mapa", "Reportes", "Dashboard", "Gestión Comercial"]
+SECCIONES_SIDEBAR_LEGACY = {
+    "🗺️  Mapa": "Mapa",
+    "📄  Reportes": "Reportes",
+    "📊  Dashboard": "Dashboard",
+    "💼  Gestión Comercial": "Gestión Comercial",
+}
+seccion_guardada = st.session_state.get("sidebar_selected_section_gas", SECCIONES_SIDEBAR[0])
+seccion_guardada = SECCIONES_SIDEBAR_LEGACY.get(seccion_guardada, seccion_guardada)
+st.session_state["sidebar_selected_section_gas"] = (
+    seccion_guardada if seccion_guardada in SECCIONES_SIDEBAR else SECCIONES_SIDEBAR[0]
+)
 with st.sidebar:
-    st.image("logo_engie_blanco.png", width=140)
-    st.markdown('<div class="engie-sub">Data & Digital for Gas Commercial</div>', unsafe_allow_html=True)
-    st.markdown('<div class="engie-section">Navegación</div>', unsafe_allow_html=True)
-    seccion = st.radio(
-        "Menú",
-        # Cartera y Garantías se fusionaron en una única vista reutilizable
-        # (ver sección "SALUD Y CICLO DE VIDA"); el selector Clientes/Garantías
-        # vive dentro de esa vista, arriba a la derecha.
-        ["🗺️  Mapa", "📄  Reportes", "📊  Dashboard", "💼  Gestión Comercial"],
-        label_visibility="collapsed",
-    )
-    periodo_sidebar_container = st.container()
+    with st.container(key="sidebar_brand_block"):
+        st.image("logo_engie_blanco.png", width=110)
+        st.markdown('<div class="engie-sub">Data & Digital for Gas Commercial</div>', unsafe_allow_html=True)
+    st.divider()
+    st.markdown('<div class="engie-section engie-nav-section">Navegación</div>', unsafe_allow_html=True)
+    with st.container(key="sidebar_nav_shell"):
+        for idx, section_name in enumerate(SECCIONES_SIDEBAR):
+            state_suffix = "active" if section_name == st.session_state["sidebar_selected_section_gas"] else "inactive"
+            with st.container(key=f"sidebar_nav_item_{idx}_{state_suffix}"):
+                if st.button(section_name, key=f"sidebar_nav_btn_gas_{idx}", use_container_width=True):
+                    if st.session_state["sidebar_selected_section_gas"] != section_name:
+                        st.session_state["sidebar_selected_section_gas"] = section_name
+                        st.rerun()
+    seccion = st.session_state["sidebar_selected_section_gas"]
+    st.divider()
+    periodo_sidebar_container = st.container(key="sidebar_period_section")
 
 _status_options = ["Activo", "Inactivo", "Cancelado", "Pre Activo", "Sin status"]
 if "status_filter_gas" not in st.session_state:
@@ -2520,7 +2652,7 @@ if not consumo_diario.empty:
     fecha_max = consumo_diario['fecha'].max().date()
 
     with periodo_sidebar_container:
-        #st.markdown('<div class="engie-section">Periodo de consumoQ</div>', unsafe_allow_html=True)
+        st.markdown('<div class="engie-section">Periodo de consumo</div>', unsafe_allow_html=True)
         if fecha_min == fecha_max:
             fecha_ini = fecha_fin = fecha_min
             st.caption(f"Único día con datos disponible: **{fecha_min.strftime('%d/%m/%Y')}**")
@@ -2618,7 +2750,7 @@ else:
 # df_geo cacheado: solo se recalcula cuando cambian el status o el rango de fechas,
 # y se construye solo en secciones que realmente lo usan.
 df_geo = pd.DataFrame()
-secciones_con_geo = {"🗺️  Mapa", "📄  Reportes", "📊  Dashboard"}
+secciones_con_geo = {"Mapa", "Reportes", "Dashboard"}
 if seccion in secciones_con_geo and cols_consumo and selected_status_gas:
     with st.spinner("Geocodificando..."):
         df_geo = _df_geo_con_consumo(
@@ -2711,6 +2843,7 @@ with st.sidebar:
     if not selected_status_gas:
         st.warning("Selecciona al menos un status para ver clientes.")
 
+    st.divider()
     st.markdown('<div class="engie-section">Datos</div>', unsafe_allow_html=True)
     if st.button("🔄  Cargar / Actualizar datos", use_container_width=True):
         st.cache_data.clear()
@@ -3290,7 +3423,7 @@ GARANTIAS_CONFIG = {
 # ============================================================
 # SECCIÓN: MAPA
 # ============================================================
-if seccion == "🗺️  Mapa":
+if seccion == "Mapa":
     mostrar_intro_globo(VISTA_CENTRO[0], VISTA_CENTRO[1], zoom_destino=6.0)
 
     col_head_title, col_head_actions = st.columns([0.78, 0.22])
@@ -3518,7 +3651,7 @@ if seccion == "🗺️  Mapa":
 # ============================================================
 # SECCIÓN: REPORTES
 # ============================================================
-elif seccion == "📄  Reportes":
+elif seccion == "Reportes":
     if "reporte_periodicidad" not in st.session_state:
         st.session_state["reporte_periodicidad"] = "Mensual"
     periodicidad_reporte = st.session_state.get("reporte_periodicidad", "Mensual")
@@ -3916,7 +4049,7 @@ elif seccion == "📄  Reportes":
 # ============================================================
 # SECCIÓN: TOP 10
 # ============================================================
-elif seccion == "📊  Dashboard":
+elif seccion == "Dashboard":
     st.subheader("Top N consumidores por periodo")
 
     df_geo_top10 = df_geo
@@ -4452,7 +4585,7 @@ elif seccion == "📊  Dashboard":
 # ============================================================
 # SECCIÓN: GESTIÓN COMERCIAL (vista unificada)
 # ============================================================
-elif seccion == "💼  Gestión Comercial":
+elif seccion == "Gestión Comercial":
     # Selector Clientes/Garantías arriba a la derecha de la sección. El valor
     # elegido se persiste en st.session_state["vista_cartera_garantias"] y
     # determina qué configuración (dataset + etiquetas) se le pasa a la
