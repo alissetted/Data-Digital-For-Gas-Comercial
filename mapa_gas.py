@@ -372,11 +372,19 @@ st.markdown(
         padding-bottom: 0.15rem;
         margin-top: -2.55rem;
     }
-    section[data-testid="stSidebar"] div[class*="st-key-sidebar_brand_block"] div[data-testid="stImage"] {
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_brand_block"] .engie-logo-wrap {
         display: flex;
         justify-content: center;
+        align-items: center;
         width: 100%;
-        margin: 0;
+        margin: 0 0 1.1rem;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_brand_block"] .engie-logo-wrap img {
+        display: block;
+        width: 100px;
+        max-width: 100%;
+        height: auto;
+        margin: 0 auto;
     }
     section[data-testid="stSidebar"] div[class*="st-key-sidebar_brand_block"] .engie-sub {
         margin-bottom: 0.35rem;
@@ -2605,7 +2613,16 @@ st.session_state["sidebar_selected_section_gas"] = (
 )
 with st.sidebar:
     with st.container(key="sidebar_brand_block"):
-        st.image("logo_engie_blanco.png", width=90)
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_engie_blanco.png")
+        if os.path.isfile(logo_path):
+            with open(logo_path, "rb") as logo_file:
+                logo_b64 = base64.b64encode(logo_file.read()).decode("ascii")
+            st.markdown(
+                f'<div class="engie-logo-wrap"><img src="data:image/png;base64,{logo_b64}" alt="ENGIE"></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown('<div class="engie-logo">ENGIE</div>', unsafe_allow_html=True)
         st.markdown('<div class="engie-sub">Data & Digital for Gas Commercial</div>', unsafe_allow_html=True)
     st.divider()
     st.markdown('<div class="engie-section engie-nav-section">Navegación</div>', unsafe_allow_html=True)
