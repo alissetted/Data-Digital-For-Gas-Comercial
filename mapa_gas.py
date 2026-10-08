@@ -370,6 +370,7 @@ st.markdown(
         width: 100%;
         padding-top: 0;
         padding-bottom: 0.15rem;
+        margin-top: -2.55rem;
     }
     section[data-testid="stSidebar"] div[class*="st-key-sidebar_brand_block"] div[data-testid="stImage"] {
         display: flex;
@@ -2604,7 +2605,7 @@ st.session_state["sidebar_selected_section_gas"] = (
 )
 with st.sidebar:
     with st.container(key="sidebar_brand_block"):
-        st.image("logo_engie_blanco.png", width=110)
+        st.image("logo_engie_blanco.png", width=90)
         st.markdown('<div class="engie-sub">Data & Digital for Gas Commercial</div>', unsafe_allow_html=True)
     st.divider()
     st.markdown('<div class="engie-section engie-nav-section">Navegación</div>', unsafe_allow_html=True)
