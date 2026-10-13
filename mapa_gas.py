@@ -731,8 +731,9 @@ def _engie_dataframe_html(data, hide_index=False, column_config=None):
 
 
 def _engie_dataframe_height(height, data):
+    alto_minimo = 142
     if isinstance(height, int):
-        return max(height, 120)
+        return max(height, alto_minimo)
     if height in ("stretch", "content"):
         return None
 
@@ -747,7 +748,7 @@ def _engie_dataframe_height(height, data):
         except TypeError:
             cantidad_filas = 0
 
-    filas_visibles = min(max(cantidad_filas, 1), 15)
+    filas_visibles = min(max(cantidad_filas, 4), 15)
     alto_header = 28
     alto_fila = 28
     padding = 2
@@ -778,7 +779,7 @@ def engie_dataframe(
     computed_height = _engie_dataframe_height(height, data)
     max_height = f"max-height:{computed_height}px;" if computed_height else ""
     wrapper_style = "width:100%;"
-    scroll_style = f"width:100%;overflow:auto;{max_height}"
+    scroll_style = f"width:100%;min-height:142px;overflow:auto;{max_height}"
     html = _engie_dataframe_html(data, hide_index=bool(hide_index), column_config=column_config)
     st.markdown(
         f"<div class='engie-dataframe-wrapper' style='{wrapper_style}'><div class='engie-dataframe-scroll' style='{scroll_style}'>{html}</div></div>",
@@ -2284,6 +2285,13 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
         if min_gj > 0:
             df_z = df_z[pd.to_numeric(df_z[col_consumo], errors='coerce').fillna(0) >= min_gj].copy()
         df_z = aplicar_jitter(df_z)
+        if 'fecha_vigencia_actualizada' in df_z.columns:
+            df_z['fecha_vigencia_popup'] = (
+                pd.to_datetime(df_z['fecha_vigencia_actualizada'], errors='coerce')
+                .dt.strftime('%d/%m/%Y').fillna('N/D')
+            )
+        else:
+            df_z['fecha_vigencia_popup'] = 'N/D'
 
         if not df_z.empty:
             consumos = df_z[col_consumo]
@@ -2318,7 +2326,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                 idx_consumo = columnas.get_loc(col_consumo)
                 idx_id = columnas.get_loc('id_instalacion')
                 idx_estado = columnas.get_loc('estado_localizacion')
-                idx_cp = columnas.get_loc('cp_localizacion')
+                idx_vig = columnas.get_loc('fecha_vigencia_popup')
                 idx_nombre = columnas.get_loc('bp') if 'bp' in columnas else columnas.get_loc('razon_social')
                 idx_spread = columnas.get_loc('spread_popup') if 'spread_popup' in columnas else None
 
@@ -2331,7 +2339,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                         f"<b>{row[idx_nombre]}</b><br>",
                         f"Instalación: {row[idx_id]}<br>",
                         f"Estado: {row[idx_estado]}<br>",
-                        f"CP: {row[idx_cp]}<br>",
+                        f"Fecha Vigencia: {row[idx_vig]}<br>",
                         f"Consumo: {c:,.0f} GJ"
                     ]
                     if spread_html:
@@ -2353,7 +2361,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                 c1, c2, c3, c4 = max_c * 1, max_c * 3, max_c * 6, max_c * 12
 
                 cols_cluster = ['lat', 'lon', col_consumo, 'bp',
-                                'id_instalacion', 'estado_localizacion', 'cp_localizacion']
+                                'id_instalacion', 'estado_localizacion', 'fecha_vigencia_popup']
                 # fallback si bp no está en el df por caché antiguo
                 if 'bp' not in df_z.columns:
                     cols_cluster[3] = 'razon_social'
@@ -2370,7 +2378,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                     var nombre  = row[3];
                     var instalacion = row[4];
                     var estado  = row[5];
-                    var cp       = row[6];
+                    var vigencia = row[6];
                     var spread  = row[7] || '';
                     var maxc    = MAXC;
                     var color;
@@ -2387,7 +2395,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                     marker.options.consumo = consumo;
                     var contenido = '<b>' + nombre + '</b><br>Instalación: ' + instalacion +
                         '<br>Estado: ' + estado +
-                        '<br>CP: ' + cp + '<br>Consumo: ' +
+                        '<br>Fecha Vigencia: ' + vigencia + '<br>Consumo: ' +
                         Math.round(consumo).toLocaleString() + ' GJ';
                     if (spread && spread.trim() !== '') {
                         contenido += '<br>' + spread;
@@ -3886,12 +3894,20 @@ elif seccion == "Reportes":
             if st.session_state.get("mostrar_manage_columns"):
                 _dialog_manage_columns(columnas_disponibles, columnas_default, columnas_state_key)
 
-        st.markdown("**Vista previa del reporte**")
+        texto_registros = f"Registros: {len(df_reporte_final)}" if df_reporte_final is not None else ""
+        st.markdown(
+            f"""
+            <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 0.5rem;">
+                <strong>Vista previa del reporte</strong>
+                <span>{texto_registros}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         if not columnas_orden:
             st.info("Selecciona al menos una columna para generar el reporte.")
         else:
             renombres_aplicados = generar_renombres_reporte(columnas_orden)
-            st.write(f"Registros: {len(df_reporte_final)}")
             column_config_reporte = column_config_fechas(df_reporte_final.columns, renombres_aplicados)
             nombre_fecha_consumo = renombres_aplicados.get('fecha_consumo')
             if nombre_fecha_consumo in df_reporte_final.columns:
@@ -4068,6 +4084,100 @@ elif seccion == "Reportes":
 # SECCIÓN: TOP 10
 # ============================================================
 elif seccion == "Dashboard":
+    st.markdown("""
+    <style>
+        [data-testid="stPlotlyChart"] .modebar {
+            top: 8px !important;
+            right: 48px !important;
+            display: flex !important;
+            border: 1px solid #D7E4F3;
+            border-radius: 6px;
+            background: #FFFFFF !important;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+            padding: 0 !important;
+        }
+        [data-testid="stPlotlyChart"] .modebar-group {
+            display: flex !important;
+            padding: 0 !important;
+            background: transparent !important;
+        }
+        [data-testid="stPlotlyChart"] .modebar-btn {
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 32px;
+            padding: 0 !important;
+            border-radius: 4px;
+        }
+        [data-testid="stPlotlyChart"] .modebar-btn svg {
+            position: static !important;
+            width: 16px;
+            height: 16px;
+        }
+        [data-testid="stPlotlyChart"] .modebar-btn:hover,
+        [data-testid="stPlotlyChart"] .modebar-btn.active {
+            background: #EAF4FC;
+        }
+        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] {
+            top: 8px !important;
+            right: 8px !important;
+            opacity: 1 !important;
+            background: transparent !important;
+        }
+        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] button {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 34px;
+            padding: 0 !important;
+            border: 1px solid #D7E4F3 !important;
+            border-radius: 6px !important;
+            background: #FFFFFF !important;
+            color: #587084 !important;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+        }
+        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] button svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] button:hover {
+            background: #EAF4FC !important;
+            color: #0077CC !important;
+        }
+        [data-testid="stPlotlyChart"] .modebar-btn:focus-visible,
+        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] button:focus-visible {
+            outline: 2px solid #0077CC;
+            outline-offset: 2px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    def _dashboard_plotly_chart(fig, key=None):
+        fig.update_layout(
+            margin=dict(t=max(fig.layout.margin.t or 0, 56)),
+            modebar=dict(
+                orientation="h",
+                bgcolor="#FFFFFF",
+                color="#587084",
+                activecolor="#0077CC",
+            ),
+        )
+        st.plotly_chart(
+            fig, use_container_width=True, key=key,
+            config={
+                "displayModeBar": True,
+                "displaylogo": False,
+                "modeBarButtons": [[
+                    "toImage", "zoom2d", "pan2d", "zoomIn2d",
+                    "zoomOut2d", "autoScale2d", "resetScale2d",
+                ]],
+                "toImageButtonOptions": {"format": "png"},
+            },
+        )
+
     st.subheader("Top N consumidores por periodo")
 
     df_geo_top10 = df_geo
@@ -4323,7 +4433,7 @@ elif seccion == "Dashboard":
                         plot_bgcolor='rgba(0,0,0,0)',
                         paper_bgcolor='rgba(0,0,0,0)',
                     )
-                    st.plotly_chart(fig_top10, use_container_width=True, config={"displayModeBar": False})
+                    _dashboard_plotly_chart(fig_top10, key=f"top_chart_{col}")
                     png_top = _png_desde_fig_json(fig_top10.to_json())
                     with download_placeholder:
                         st.download_button(
@@ -4446,9 +4556,7 @@ elif seccion == "Dashboard":
                             plot_bgcolor='rgba(0,0,0,0)',
                             paper_bgcolor='rgba(0,0,0,0)',
                         )
-                        st.plotly_chart(fig_evol, use_container_width=True,
-                                        config={"displayModeBar": False},
-                                        key=f"evol_{col}")
+                        _dashboard_plotly_chart(fig_evol, key=f"evol_{col}")
 
                     st.write("")
                     col_donut, col_barras = st.columns(2)
@@ -4478,9 +4586,7 @@ elif seccion == "Dashboard":
                                 legend=dict(orientation="v", x=1.0, y=0.5),
                                 paper_bgcolor='rgba(0,0,0,0)',
                             )
-                            st.plotly_chart(fig_donut, use_container_width=True,
-                                            config={"displayModeBar": False},
-                                            key=f"donut_{col}")
+                            _dashboard_plotly_chart(fig_donut, key=f"donut_{col}")
 
                     with col_barras:
                         st.markdown("**Clientes por zona**")
@@ -4512,9 +4618,7 @@ elif seccion == "Dashboard":
                                 plot_bgcolor='rgba(0,0,0,0)',
                                 paper_bgcolor='rgba(0,0,0,0)',
                             )
-                            st.plotly_chart(fig_cli, use_container_width=True,
-                                            config={"displayModeBar": False},
-                                            key=f"barzona_{col}")
+                            _dashboard_plotly_chart(fig_cli, key=f"barzona_{col}")
 
                     st.markdown("---")
 
