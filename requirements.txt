@@ -1,6 +1,7 @@
 streamlit==1.59.2
 streamlit-folium==0.27.2
 streamlit-sortables==0.3.1
+streamlit-echarts==0.4.0
 pandas==3.0.3
 numpy==2.5.1
 pyodbc==5.3.0

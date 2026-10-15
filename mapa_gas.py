@@ -7,6 +7,7 @@ import folium
 import time
 import os
 import base64
+from html import escape
 from PIL import Image
 from folium.plugins import FastMarkerCluster
 from folium import MacroElement
@@ -20,10 +21,11 @@ import unicodedata
 import re
 from datetime import date, datetime
 import plotly.graph_objects as go
-import plotly.io as pio
 from fpdf import FPDF
 from pandas.io.formats.style import Styler
 from streamlit_sortables import sort_items
+from streamlit_echarts import JsCode, st_echarts
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Clientes Activos y Consumos Anuales", layout="wide")
 
@@ -730,28 +732,200 @@ def _engie_dataframe_html(data, hide_index=False, column_config=None):
     return styler.to_html(classes="engie-dataframe-table")
 
 
+_ENGIE_TABLA_CSS = """
+:root {
+    --engie-table-head-bg: #002D72;
+    --engie-table-head-text: #FFFFFF;
+}
+html, body {
+    margin: 0;
+    height: 100%;
+    background: transparent;
+    font-family: "Source Sans Pro", "Source Sans 3", "Segoe UI", Roboto, sans-serif;
+}
+.engie-dataframe-wrapper {
+    box-sizing: border-box;
+    height: 100%;
+    border-radius: 14px;
+    border: 1.5px solid #D7E4F3;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+    overflow: hidden;
+    background: #FFFFFF;
+}
+.engie-dataframe-scroll {
+    height: 100%;
+    overflow: auto;
+}
+.engie-dataframe-wrapper table {
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.95rem;
+    width: 100%;
+}
+.engie-dataframe-wrapper thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--engie-table-head-bg) !important;
+    color: var(--engie-table-head-text) !important;
+    font-weight: 700;
+    border-bottom: 1px solid #D7E4F3;
+}
+.engie-dataframe-wrapper thead th * {
+    color: var(--engie-table-head-text) !important;
+}
+.engie-dataframe-wrapper tbody td,
+.engie-dataframe-wrapper tbody th {
+    background: #FFFFFF;
+    color: #1F2937;
+}
+.engie-dataframe-wrapper th,
+.engie-dataframe-wrapper td {
+    padding: 0.34rem 0.75rem;
+    border-right: 1px solid #E5EDF6;
+    border-bottom: 1px solid #E5EDF6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+    vertical-align: middle;
+}
+.engie-dataframe-wrapper tr:last-child td,
+.engie-dataframe-wrapper tr:last-child th {
+    border-bottom: none;
+}
+.engie-dataframe-wrapper th:last-child,
+.engie-dataframe-wrapper td:last-child {
+    border-right: none;
+}
+.col-resizer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: col-resize;
+    z-index: 2;
+}
+.col-resizer::after {
+    content: "";
+    position: absolute;
+    top: 25%;
+    bottom: 25%;
+    left: 3px;
+    width: 1px;
+    background: rgba(255, 255, 255, 0.45);
+}
+.col-resizer:hover::after,
+.col-resizer.activo::after {
+    left: 2px;
+    width: 2px;
+    background: #FFFFFF;
+}
+"""
+
+_ENGIE_TABLA_JS = """
+(function () {
+    var table = document.querySelector(".engie-dataframe-wrapper table");
+    if (!table) return;
+    var ths = Array.prototype.slice.call(table.querySelectorAll("thead th"));
+    if (!ths.length) return;
+    var ultimo = ths.length - 1;
+    var anchos = null;
+
+    function sincronizar() {
+        var total = 0;
+        ths.forEach(function (th, i) {
+            if (anchos[i] == null) { th.style.width = ""; return; }
+            th.style.width = anchos[i] + "px";
+            total += anchos[i];
+        });
+        table.style.tableLayout = "fixed";
+        table.style.width = anchos[ultimo] == null ? "100%" : total + "px";
+    }
+
+    function fijar() {
+        anchos = ths.map(function (th) { return th.getBoundingClientRect().width; });
+        anchos[ultimo] = null;
+        sincronizar();
+    }
+
+    ths.forEach(function (th, i) {
+        var tirador = document.createElement("div");
+        tirador.className = "col-resizer";
+        th.appendChild(tirador);
+        tirador.addEventListener("mousedown", function (e) {
+            e.preventDefault();
+            if (anchos == null) fijar();
+            var inicioX = e.clientX;
+            var inicioAncho = th.getBoundingClientRect().width;
+            tirador.classList.add("activo");
+            document.body.style.cursor = "col-resize";
+            document.body.style.userSelect = "none";
+            function mover(ev) {
+                anchos[i] = Math.max(48, inicioAncho + ev.clientX - inicioX);
+                sincronizar();
+            }
+            function soltar() {
+                document.removeEventListener("mousemove", mover);
+                document.removeEventListener("mouseup", soltar);
+                tirador.classList.remove("activo");
+                document.body.style.cursor = "";
+                document.body.style.userSelect = "";
+            }
+            document.addEventListener("mousemove", mover);
+            document.addEventListener("mouseup", soltar);
+        });
+    });
+
+    var indicesCliente = [];
+    ths.forEach(function (th, i) {
+        if (th.textContent.trim() === "Cliente") indicesCliente.push(i);
+    });
+    if (indicesCliente.length) {
+        fijar();
+        indicesCliente.forEach(function (i) {
+            if (anchos[i] != null) anchos[i] = anchos[i] * 0.55;
+        });
+        sincronizar();
+    }
+})();
+"""
+
+
+def _engie_tabla_documento(tabla_html):
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<style>{_ENGIE_TABLA_CSS}</style></head><body>"
+        "<div class='engie-dataframe-wrapper'><div class='engie-dataframe-scroll'>"
+        f"{tabla_html}</div></div>"
+        f"<script>{_ENGIE_TABLA_JS}</script></body></html>"
+    )
+
+
+def _engie_cantidad_filas(data):
+    if isinstance(data, Styler):
+        return len(data.data.index)
+    if isinstance(data, pd.DataFrame):
+        return len(data.index)
+    try:
+        return len(data)
+    except TypeError:
+        return 0
+
+
 def _engie_dataframe_height(height, data):
     alto_minimo = 142
+    alto_header = 34
+    alto_fila = 32
+    padding = 2
+    cantidad_filas = _engie_cantidad_filas(data)
     if isinstance(height, int):
         return max(height, alto_minimo)
     if height in ("stretch", "content"):
-        return None
-
-    cantidad_filas = 0
-    if isinstance(data, Styler):
-        cantidad_filas = len(data.data.index)
-    elif isinstance(data, pd.DataFrame):
-        cantidad_filas = len(data.index)
-    else:
-        try:
-            cantidad_filas = len(data)
-        except TypeError:
-            cantidad_filas = 0
+        return alto_header + cantidad_filas * alto_fila + padding
 
     filas_visibles = min(max(cantidad_filas, 4), 15)
-    alto_header = 28
-    alto_fila = 28
-    padding = 2
     return alto_header + filas_visibles * alto_fila + padding
 
 
@@ -776,15 +950,9 @@ def engie_dataframe(
             **kwargs,
         )
 
-    computed_height = _engie_dataframe_height(height, data)
-    max_height = f"max-height:{computed_height}px;" if computed_height else ""
-    wrapper_style = "width:100%;"
-    scroll_style = f"width:100%;min-height:142px;overflow:auto;{max_height}"
+    alto = _engie_dataframe_height(height, data)
     html = _engie_dataframe_html(data, hide_index=bool(hide_index), column_config=column_config)
-    st.markdown(
-        f"<div class='engie-dataframe-wrapper' style='{wrapper_style}'><div class='engie-dataframe-scroll' style='{scroll_style}'>{html}</div></div>",
-        unsafe_allow_html=True,
-    )
+    components.html(_engie_tabla_documento(html), height=alto, scrolling=False)
     return None
 
 
@@ -1950,18 +2118,6 @@ def _top_n_y_ranking_previo(df_local: pd.DataFrame, col: str, col_prev, n_top: i
     return top, ranking_prev
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _png_desde_fig_json(fig_json: str) -> bytes:
-    """Renderiza a PNG (vía kaleido) una figura Plotly ya serializada a JSON,
-    cacheado por ese JSON. `to_image()` es la llamada realmente costosa del
-    Top N (lanza un proceso de renderizado por gráfico) y antes se ejecutaba
-    SIN caché para las 12 pestañas en cada rerun (st.tabs() corre el cuerpo de
-    todas, no solo la visible). Cachear por el JSON de la figura (string,
-    barato de hashear) evita repetir el render cuando ni los datos ni n_top
-    cambiaron desde el rerun anterior."""
-    return pio.from_json(fig_json).to_image(format="png")
-
-
 def _excel_bytes_desde_hojas(hojas: dict[str, pd.DataFrame]) -> bytes:
     """Construye un archivo Excel en memoria con una hoja por DataFrame."""
     buffer = BytesIO()
@@ -2646,6 +2802,10 @@ with st.sidebar:
     st.divider()
     periodo_sidebar_container = st.container(key="sidebar_period_section")
 
+# El navegador conserva el scroll al cambiar de sección; se marca el cambio aquí.
+_should_scroll_top = st.session_state.get("_active_view") != seccion
+st.session_state["_active_view"] = seccion
+
 _status_options = ["Activo", "Inactivo", "Cancelado", "Pre Activo", "Sin status"]
 if "status_filter_gas" not in st.session_state:
     st.session_state.status_filter_gas = ["Activo"]
@@ -2904,6 +3064,73 @@ if zona_sel_global != "Vista general" and not df_geo.empty and 'zona' in df_geo.
     df_geo = df_geo[zonas_norm == zona_sel_global_norm].copy()
 
 
+DASHBOARD_ECHARTS_FONT = '"Open Sans", verdana, arial, sans-serif'
+DASHBOARD_TOOLBOX = {
+    "right": 8,
+    "top": 4,
+    "itemSize": 16,
+    "iconStyle": {"borderColor": "#587084"},
+    "emphasis": {"iconStyle": {"borderColor": "#0077CC"}},
+    "feature": {
+        "saveAsImage": {
+            "title": "Descargar gráfico",
+            "type": "png",
+            "pixelRatio": 2,
+            "backgroundColor": "#FFFFFF",
+        },
+    },
+}
+DASHBOARD_TOOLTIP = {
+    "backgroundColor": "#FFFFFF",
+    "borderColor": "#D9E0E8",
+    "textStyle": {"color": "#334155", "fontSize": 12},
+}
+DASHBOARD_LINE_COLORS = ["#0068c9", "#83c9ff", "#ffabab", "#29b09d", "#7defa1", "#ff2b2b", "#ffd16a", "#6d3fc0"]
+
+
+def _mezclar(hex_color, factor):
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i+2], 16) for i in (0, 2, 4))
+    destino = 255 if factor > 0 else 0
+    f = abs(factor)
+    r, g, b = (round(c + (destino - c) * f) for c in (r, g, b))
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _degradado_radial(hex_color, oscuro=-0.08, claro=0.12):
+    return {
+        "type": "radial",
+        "x": 0.5, "y": 0.5, "r": 0.5,
+        "colorStops": [
+            {"offset": 0.0, "color": _mezclar(hex_color, oscuro)},
+            {"offset": 0.55, "color": hex_color},
+            {"offset": 1.0, "color": _mezclar(hex_color, claro)},
+        ],
+    }
+
+
+def _degradado_lineal(hex_color, oscuro=-0.08, claro=0.12, vertical=False):
+    return {
+        "type": "linear",
+        "x": 0, "y": 0, "x2": 0 if vertical else 1, "y2": 1 if vertical else 0,
+        "colorStops": [
+            {"offset": 0.0, "color": _mezclar(hex_color, oscuro)},
+            {"offset": 0.55, "color": hex_color},
+            {"offset": 1.0, "color": _mezclar(hex_color, claro)},
+        ],
+    }
+
+
+def _dashboard_echarts(option, height, key):
+    opcion = {
+        "animation": False,
+        "textStyle": {"fontFamily": DASHBOARD_ECHARTS_FONT},
+        "toolbox": DASHBOARD_TOOLBOX,
+        **option,
+    }
+    st_echarts(options=opcion, height=f"{height}px", key=key)
+
+
 # ============================================================
 # VISTA REUTILIZABLE: SALUD Y CICLO DE VIDA (Cartera / Garantías)
 # ============================================================
@@ -3085,24 +3312,96 @@ def render_salud_ciclo_vida(cfg):
             "#F76707" if mes == mes_ref_cartera else "#E03131"
             for mes in timeline_plot["AñoMes"]
         ]
-        fig_timeline = go.Figure()
-        fig_timeline.add_bar(x=timeline_plot["AñoMes"], y=timeline_plot["Altas"], name="Altas", marker_color=color_altas)
-        fig_timeline.add_bar(x=timeline_plot["AñoMes"], y=-timeline_plot["Bajas"], name="Bajas", marker_color=color_bajas)
-        fig_timeline.add_trace(go.Scatter(
-            x=timeline_plot["AñoMes"], y=timeline_plot["Neto"], name="Neto",
-            mode="lines+markers", line=dict(color=BRAND_COLORS["primary_dark"], width=2),
-        ))
-        fig_timeline.update_layout(
-            height=380,
-            barmode="relative",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            yaxis_title=cfg["timeline_yaxis"],
-            xaxis_title="",
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=10, r=10, t=40, b=10),
-        )
-        st.plotly_chart(fig_timeline, use_container_width=True, config={"displayModeBar": False})
+        option_timeline = {
+            "tooltip": {
+                **DASHBOARD_TOOLTIP,
+                "trigger": "axis",
+                "axisPointer": {"type": "shadow"},
+                "formatter": JsCode(
+                    "function (params) {"
+                    " var lineas = ['<b>' + params[0].axisValue + '</b>'];"
+                    " params.forEach(function (p) {"
+                    " var v = p.seriesName === 'Bajas' ? Math.abs(p.value) : p.value;"
+                    " lineas.push(p.marker + p.seriesName + ': ' + v.toLocaleString('es-MX'));"
+                    " });"
+                    " return lineas.join('<br/>');"
+                    " }"
+                ),
+            },
+            "legend": {
+                "top": 4,
+                "right": 60,
+                "icon": "roundRect",
+                "itemWidth": 12,
+                "itemHeight": 12,
+                "textStyle": {"color": "#1F2937"},
+            },
+            "grid": {"left": 70, "right": 20, "top": 56, "bottom": 80},
+            "xAxis": {
+                "type": "category",
+                "name": "Mes",
+                "nameLocation": "middle",
+                "nameGap": 34,
+                "nameTextStyle": {"fontSize": 14, "color": "#1F2937"},
+                "data": [month_to_spanish_label(mes) for mes in timeline_plot["AñoMes"]],
+                "axisLine": {"show": False},
+                "axisTick": {"show": False},
+                "axisLabel": {"color": "#1F2937", "fontSize": 11, "hideOverlap": True, "rotate": 0},
+            },
+            "yAxis": {
+                "type": "value",
+                "name": cfg["timeline_yaxis"],
+                "nameLocation": "middle",
+                "nameGap": 50,
+                "nameTextStyle": {"fontSize": 14, "color": "#1F2937"},
+                "axisLine": {"show": False},
+                "axisTick": {"show": False},
+                "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
+                "axisLabel": {"color": "#1F2937"},
+            },
+            "series": [
+                {
+                    "name": "Altas",
+                    "type": "bar",
+                    "stack": "cambios",
+                    "barCategoryGap": "20%",
+                    "itemStyle": {"color": BRAND_COLORS["primary"], "shadowBlur": 20, "shadowColor": "rgba(0,0,0,0.15)", "shadowOffsetX": 6},
+                    "emphasis": {"itemStyle": {"shadowBlur": 28, "shadowColor": "rgba(0,0,0,0.25)"}},
+                    "data": [
+                        {
+                            "value": int(valor),
+                            "itemStyle": {"color": _degradado_lineal(color, vertical=True), "borderRadius": [10, 10, 0, 0]},
+                        }
+                        for valor, color in zip(timeline_plot["Altas"], color_altas)
+                    ],
+                },
+                {
+                    "name": "Bajas",
+                    "type": "bar",
+                    "stack": "cambios",
+                    "barCategoryGap": "20%",
+                    "itemStyle": {"color": "#E03131", "shadowBlur": 20, "shadowColor": "rgba(0,0,0,0.15)", "shadowOffsetX": 6},
+                    "emphasis": {"itemStyle": {"shadowBlur": 28, "shadowColor": "rgba(0,0,0,0.25)"}},
+                    "data": [
+                        {
+                            "value": -int(valor),
+                            "itemStyle": {"color": _degradado_lineal(color, vertical=True), "borderRadius": [0, 0, 10, 10]},
+                        }
+                        for valor, color in zip(timeline_plot["Bajas"], color_bajas)
+                    ],
+                },
+                {
+                    "name": "Neto",
+                    "type": "line",
+                    "symbol": "circle",
+                    "symbolSize": 6,
+                    "lineStyle": {"color": BRAND_COLORS["primary_dark"], "width": 2},
+                    "itemStyle": {"color": BRAND_COLORS["primary_dark"]},
+                    "data": [int(valor) for valor in timeline_plot["Neto"]],
+                },
+            ],
+        }
+        _dashboard_echarts(option_timeline, 380, key=f"timeline_altas_bajas_{cfg['mes_historico_key']}")
         if mes_ref_cartera:
             st.caption(
                 f"El mes resaltado ({month_to_spanish_label(mes_ref_cartera)}) corresponde al periodo de consumo seleccionado arriba."
@@ -3367,7 +3666,7 @@ CARTERA_CONFIG = {
     ],
     "churn_label": "Tasa de churn del mes",
     "activation_label": "Tasa de activación del mes",
-    "timeline_yaxis": "Clientes",
+    "timeline_yaxis": "Número de Clientes",
     "timeline_empty_msg": "No hay fechas de alta/baja suficientes para construir la línea de tiempo.",
     "mes_historico_key": "mes_historico_altas_bajas_gas",
     "expander_baja_title": "Clientes dados de baja",
@@ -4084,100 +4383,6 @@ elif seccion == "Reportes":
 # SECCIÓN: TOP 10
 # ============================================================
 elif seccion == "Dashboard":
-    st.markdown("""
-    <style>
-        [data-testid="stPlotlyChart"] .modebar {
-            top: 8px !important;
-            right: 48px !important;
-            display: flex !important;
-            border: 1px solid #D7E4F3;
-            border-radius: 6px;
-            background: #FFFFFF !important;
-            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
-            padding: 0 !important;
-        }
-        [data-testid="stPlotlyChart"] .modebar-group {
-            display: flex !important;
-            padding: 0 !important;
-            background: transparent !important;
-        }
-        [data-testid="stPlotlyChart"] .modebar-btn {
-            display: flex !important;
-            align-items: center;
-            justify-content: center;
-            width: 30px;
-            height: 32px;
-            padding: 0 !important;
-            border-radius: 4px;
-        }
-        [data-testid="stPlotlyChart"] .modebar-btn svg {
-            position: static !important;
-            width: 16px;
-            height: 16px;
-        }
-        [data-testid="stPlotlyChart"] .modebar-btn:hover,
-        [data-testid="stPlotlyChart"] .modebar-btn.active {
-            background: #EAF4FC;
-        }
-        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] {
-            top: 8px !important;
-            right: 8px !important;
-            opacity: 1 !important;
-            background: transparent !important;
-        }
-        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] button {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 34px;
-            height: 34px;
-            padding: 0 !important;
-            border: 1px solid #D7E4F3 !important;
-            border-radius: 6px !important;
-            background: #FFFFFF !important;
-            color: #587084 !important;
-            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
-        }
-        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] button svg {
-            width: 16px;
-            height: 16px;
-            fill: currentColor;
-        }
-        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] button:hover {
-            background: #EAF4FC !important;
-            color: #0077CC !important;
-        }
-        [data-testid="stPlotlyChart"] .modebar-btn:focus-visible,
-        [data-testid="stElementContainer"]:has([data-testid="stPlotlyChart"]) [data-testid="stElementToolbar"] button:focus-visible {
-            outline: 2px solid #0077CC;
-            outline-offset: 2px;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-    def _dashboard_plotly_chart(fig, key=None):
-        fig.update_layout(
-            margin=dict(t=max(fig.layout.margin.t or 0, 56)),
-            modebar=dict(
-                orientation="h",
-                bgcolor="#FFFFFF",
-                color="#587084",
-                activecolor="#0077CC",
-            ),
-        )
-        st.plotly_chart(
-            fig, use_container_width=True, key=key,
-            config={
-                "displayModeBar": True,
-                "displaylogo": False,
-                "modeBarButtons": [[
-                    "toImage", "zoom2d", "pan2d", "zoomIn2d",
-                    "zoomOut2d", "autoScale2d", "resetScale2d",
-                ]],
-                "toImageButtonOptions": {"format": "png"},
-            },
-        )
-
     st.subheader("Top N consumidores por periodo")
 
     df_geo_top10 = df_geo
@@ -4228,7 +4433,7 @@ elif seccion == "Dashboard":
         for subtab, col in zip(subtabs, cols_consumo):
             with subtab:
                 # Fila de control: slider y descarga alineados
-                control_col, download_col = st.columns([5, 1.4])
+                control_col, _ = st.columns([5, 1.4])
                 
                 with control_col:
                     n_top = st.slider(
@@ -4242,8 +4447,6 @@ elif seccion == "Dashboard":
                     )
 
 
-                with download_col:
-                    download_placeholder = st.empty()
 
                 df_geo_top10_local = base_top
                 if filtro_top10_global and not base_top.empty:
@@ -4401,50 +4604,55 @@ elif seccion == "Dashboard":
 
                     hovertext = top_chart.apply(_hover_fila, axis=1)
 
-                    fig_top10 = go.Figure(go.Bar(
-                        x=top_chart['Consumo (GJ)'],
-                        y=y_labels,
-                        orientation='h',
-                        marker=dict(
-                            color=bar_colors,
-                            line=dict(color='rgba(0,0,0,0)', width=0),
-                        ),
-                        text=top_chart['Consumo (GJ)'].apply(lambda v: f"{v:,.0f}"),
-                        textposition='outside',
-                        textfont=dict(size=10, color='#1F2937'),
-                        hovertext=hovertext,
-                        hoverinfo='text',
-                    ))
-                    fig_top10.update_layout(
-                        height=max(300, 44 * n_bars),
-                        margin=dict(l=10, r=200, t=10, b=10),
-                        xaxis=dict(
-                            title='Consumo (GJ)',
-                            showgrid=True,
-                            gridcolor='#EEF2F7',
-                            zeroline=False,
-                            tickfont=dict(color='#1F2937'),
-                        ),
-                        yaxis=dict(
-                            showgrid=False,
-                            tickfont=dict(size=11, color='#111827'),
-                            automargin=True,
-                        ),
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        paper_bgcolor='rgba(0,0,0,0)',
-                    )
-                    _dashboard_plotly_chart(fig_top10, key=f"top_chart_{col}")
-                    png_top = _png_desde_fig_json(fig_top10.to_json())
-                    with download_placeholder:
-                        st.download_button(
-                            "Descargar gráfico",
-                            png_top,
-                            file_name=f"top_{col}_{n_top}_consumidores.png",
-                            mime="image/png",
-                            key=f"download_top_{col}",
-                            use_container_width=True,
-                            help="Descarga el gráfico del Top N en formato PNG.",
-                        )
+                    option_top10 = {
+                        "tooltip": {
+                            **DASHBOARD_TOOLTIP,
+                            "trigger": "item",
+                            "formatter": JsCode("function (p) { return p.data.hover; }"),
+                        },
+                        "grid": {"left": 10, "right": 200, "top": 56, "bottom": 48, "containLabel": True},
+                        "xAxis": {
+                            "type": "value",
+                            "name": "Consumo (GJ)",
+                            "nameLocation": "middle",
+                            "nameGap": 30,
+                            "axisLine": {"show": False},
+                            "axisTick": {"show": False},
+                            "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
+                            "axisLabel": {"color": "#1F2937"},
+                        },
+                        "yAxis": {
+                            "type": "category",
+                            "data": list(y_labels),
+                            "axisLine": {"show": False},
+                            "axisTick": {"show": False},
+                            "axisLabel": {"fontSize": 11, "color": "#111827"},
+                        },
+                        "series": [{
+                            "type": "bar",
+                            "barCategoryGap": "20%",
+                            "itemStyle": {"shadowBlur": 20, "shadowColor": "rgba(0,0,0,0.15)", "shadowOffsetX": 6},
+                            "emphasis": {"itemStyle": {"shadowBlur": 28, "shadowColor": "rgba(0,0,0,0.25)"}},
+                            "data": [
+                                {
+                                    "value": float(valor),
+                                    "itemStyle": {"color": _degradado_lineal(color), "borderRadius": [0, 10, 10, 0]},
+                                    "texto": f"{valor:,.0f}",
+                                    "hover": hover,
+                                }
+                                for valor, color, hover in zip(top_chart['Consumo (GJ)'], bar_colors, hovertext)
+                            ],
+                            "label": {
+                                "show": True,
+                                "position": "right",
+                                "fontSize": 10,
+                                "fontWeight": "bold",
+                                "color": "#1F2937",
+                                "formatter": JsCode("function (p) { return p.data.texto; }"),
+                            },
+                        }],
+                    }
+                    _dashboard_echarts(option_top10, max(300, 44 * n_bars), key=f"top_chart_{col}")
 
                     clientes_repetidos = conteo_cliente[conteo_cliente > 1]
                     if not clientes_repetidos.empty:
@@ -4540,23 +4748,43 @@ elif seccion == "Dashboard":
                         st.info("Sin datos mensuales para graficar.")
                     else:
                         x_labels = [month_to_spanish_label(str(m)) for m in serie_mensual.index]
-                        fig_evol = go.Figure(go.Scatter(
-                            x=x_labels, y=serie_mensual.values,
-                            mode='lines+markers', fill='tozeroy',
-                            line=dict(color="#007BC5", width=2),
-                            fillcolor='rgba(0, 119, 204, 0.15)',
-                            marker=dict(size=7, color="#007BC5"),
-                            hovertemplate='<b>%{x}</b><br>%{y:,.0f} GJ<extra></extra>',
-                        ))
-                        fig_evol.update_layout(
-                            height=360,
-                            margin=dict(l=10, r=10, t=10, b=10),
-                            yaxis=dict(title='Volumen (GJ)', showgrid=True, gridcolor='#EEF2F7', zeroline=False),
-                            xaxis=dict(showgrid=False),
-                            plot_bgcolor='rgba(0,0,0,0)',
-                            paper_bgcolor='rgba(0,0,0,0)',
-                        )
-                        _dashboard_plotly_chart(fig_evol, key=f"evol_{col}")
+                        option_evol = {
+                            "tooltip": {
+                                **DASHBOARD_TOOLTIP,
+                                "trigger": "item",
+                                "formatter": JsCode("function (p) { return '<b>' + p.name + '</b><br>' + Number(p.value).toLocaleString('en-US', {maximumFractionDigits: 0}) + ' GJ'; }"),
+                            },
+                            "grid": {"left": 10, "right": 10, "top": 56, "bottom": 10, "containLabel": True},
+                            "xAxis": {
+                                "type": "category",
+                                "data": x_labels,
+                                "boundaryGap": False,
+                                "axisLine": {"show": False},
+                                "axisTick": {"show": False},
+                                "splitLine": {"show": False},
+                            },
+                            "yAxis": {
+                                "type": "value",
+                                "name": "Volumen (GJ)",
+                                "nameLocation": "middle",
+                                "nameRotate": 90,
+                                "nameGap": 70,
+                                "min": 0,
+                                "axisLine": {"show": False},
+                                "axisTick": {"show": False},
+                                "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
+                            },
+                            "series": [{
+                                "type": "line",
+                                "data": [float(v) for v in serie_mensual.values],
+                                "symbol": "circle",
+                                "symbolSize": 7,
+                                "lineStyle": {"color": "#007BC5", "width": 2},
+                                "itemStyle": {"color": "#007BC5"},
+                                "areaStyle": {"color": "rgba(0, 119, 204, 0.15)"},
+                            }],
+                        }
+                        _dashboard_echarts(option_evol, 360, key=f"evol_{col}")
 
                     st.write("")
                     col_donut, col_barras = st.columns(2)
@@ -4572,21 +4800,36 @@ elif seccion == "Dashboard":
                         if vol_zona.empty:
                             st.info("Sin volumen por zona.")
                         else:
-                            fig_donut = go.Figure(go.Pie(
-                                labels=vol_zona.index.tolist(),
-                                values=vol_zona.values,
-                                hole=0.55,
-                                marker=dict(colors=[ZONA_COLORS.get(z, "#0077CC") for z in vol_zona.index]),
-                                textinfo='percent',
-                                hovertemplate='<b>%{label}</b><br>%{value:,.0f} GJ<br>%{percent}<extra></extra>',
-                            ))
-                            fig_donut.update_layout(
-                                height=380,
-                                margin=dict(l=10, r=10, t=10, b=10),
-                                legend=dict(orientation="v", x=1.0, y=0.5),
-                                paper_bgcolor='rgba(0,0,0,0)',
-                            )
-                            _dashboard_plotly_chart(fig_donut, key=f"donut_{col}")
+                            total_zona = float(vol_zona.sum())
+                            data_donut = []
+                            for z, v in vol_zona.items():
+                                item = {"name": z, "value": float(v), "itemStyle": {"color": _degradado_radial(ZONA_COLORS.get(z, "#0077CC"))}}
+                                if v / total_zona < 0.05:
+                                    item["label"] = {"position": "outside", "color": "#333333"}
+                                    item["labelLine"] = {"show": True, "length": 8, "length2": 6}
+                                data_donut.append(item)
+                            option_donut = {
+                                "tooltip": {
+                                    **DASHBOARD_TOOLTIP,
+                                    "trigger": "item",
+                                    "formatter": JsCode("function (p) { return '<b>' + p.name + '</b><br>' + Number(p.value).toLocaleString('en-US', {maximumFractionDigits: 0}) + ' GJ<br>' + Number(p.percent).toFixed(2) + '%'; }"),
+                                },
+                                "legend": {"orient": "vertical", "right": 10, "top": "middle", "selectedMode": False, "textStyle": {"color": "#1F2937"}},
+                                "series": [{
+                                    "type": "pie",
+                                    "radius": ["38%", "85%"],
+                                    "center": ["40%", "52%"],
+                                    "padAngle": 3,
+                                    "percentPrecision": 1,
+                                    "selectedMode": "single",
+                                    "itemStyle": {"borderRadius": 10, "shadowBlur": 20, "shadowColor": "rgba(0,0,0,0.15)", "shadowOffsetY": 6},
+                                    "label": {"show": True, "position": "inside", "formatter": "{d}%", "fontWeight": "bold", "fontSize": 18, "color": "#1F2937"},
+                                    "labelLine": {"show": False},
+                                    "emphasis": {"scale": True, "scaleSize": 6},
+                                    "data": data_donut,
+                                }],
+                            }
+                            _dashboard_echarts(option_donut, 380, key=f"donut_{col}")
 
                     with col_barras:
                         st.markdown("**Clientes por zona**")
@@ -4600,25 +4843,37 @@ elif seccion == "Dashboard":
                         if cli_zona.empty:
                             st.info("Sin clientes por zona.")
                         else:
-                            fig_cli = go.Figure(go.Bar(
-                                x=cli_zona.values,
-                                y=cli_zona.index.tolist(),
-                                orientation='h',
-                                marker_color="#007BC5",
-                                text=cli_zona.values,
-                                textposition='outside',
-                                textfont=dict(size=11, color='#1F2937'),
-                                hovertemplate='<b>%{y}</b><br>%{x:,} clientes<extra></extra>',
-                            ))
-                            fig_cli.update_layout(
-                                height=380,
-                                margin=dict(l=10, r=40, t=10, b=10),
-                                xaxis=dict(title='Clientes', showgrid=True, gridcolor='#EEF2F7', zeroline=False),
-                                yaxis=dict(showgrid=False, tickfont=dict(size=11)),
-                                plot_bgcolor='rgba(0,0,0,0)',
-                                paper_bgcolor='rgba(0,0,0,0)',
-                            )
-                            _dashboard_plotly_chart(fig_cli, key=f"barzona_{col}")
+                            option_cli = {
+                                "tooltip": {
+                                    **DASHBOARD_TOOLTIP,
+                                    "trigger": "item",
+                                    "formatter": JsCode("function (p) { return '<b>' + p.name + '</b><br>' + Number(p.value).toLocaleString('en-US') + ' clientes'; }"),
+                                },
+                                "grid": {"left": 10, "right": 40, "top": 56, "bottom": 48, "containLabel": True},
+                                "xAxis": {
+                                    "type": "value",
+                                    "name": "Clientes",
+                                    "nameLocation": "middle",
+                                    "nameGap": 30,
+                                    "axisLine": {"show": False},
+                                    "axisTick": {"show": False},
+                                    "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
+                                },
+                                "yAxis": {
+                                    "type": "category",
+                                    "data": cli_zona.index.tolist(),
+                                    "axisLine": {"show": False},
+                                    "axisTick": {"show": False},
+                                    "axisLabel": {"fontSize": 11},
+                                },
+                                "series": [{
+                                    "type": "bar",
+                                    "data": [int(v) for v in cli_zona.values],
+                                    "itemStyle": {"color": "#007BC5"},
+                                    "label": {"show": True, "position": "right", "fontSize": 11, "color": "#1F2937"},
+                                }],
+                            }
+                            _dashboard_echarts(option_cli, 380, key=f"barzona_{col}")
 
                     st.markdown("---")
 
@@ -4659,7 +4914,35 @@ elif seccion == "Dashboard":
                             .sort_index()
                         )
                         st.caption(f"Consumo diario total {zona_txt} - {nombre_consumo(col)}")
-                        st.line_chart(tendencia_total, color="#007BC5")
+                        fechas_total = [pd.Timestamp(f).strftime("%Y-%m-%d") for f in tendencia_total.index]
+                        option_tend_total = {
+                            "tooltip": {**DASHBOARD_TOOLTIP, "trigger": "axis"},
+                            "grid": {"left": 10, "right": 20, "top": 56, "bottom": 10, "containLabel": True},
+                            "xAxis": {
+                                "type": "category",
+                                "data": fechas_total,
+                                "boundaryGap": False,
+                                "axisLine": {"show": False},
+                                "axisTick": {"show": False},
+                                "splitLine": {"show": False},
+                            },
+                            "yAxis": {
+                                "type": "value",
+                                "scale": True,
+                                "axisLine": {"show": False},
+                                "axisTick": {"show": False},
+                                "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
+                            },
+                            "series": [{
+                                "name": "Consumo (GJ)",
+                                "type": "line",
+                                "showSymbol": False,
+                                "data": [float(v) for v in tendencia_total.values],
+                                "lineStyle": {"color": "#007BC5", "width": 2},
+                                "itemStyle": {"color": "#007BC5"},
+                            }],
+                        }
+                        _dashboard_echarts(option_tend_total, 500, key=f"tend_total_{col}")
                         datos_total_descarga = tendencia_total.rename('Consumo_GJ').reset_index()
                         datos_total_descarga.columns = ['Fecha', 'Consumo_GJ']
                         st.download_button(
@@ -4686,7 +4969,40 @@ elif seccion == "Dashboard":
                                 .sort_index()
                             )
                             st.caption("Tendencia diaria de los 5 clientes líderes del periodo")
-                            st.line_chart(tendencia_clientes)
+                            fechas_lideres = [pd.Timestamp(f).strftime("%Y-%m-%d") for f in tendencia_clientes.index]
+                            option_tend_lideres = {
+                                "legend": {"top": 0, "textStyle": {"color": "#1F2937"}},
+                                "tooltip": {**DASHBOARD_TOOLTIP, "trigger": "axis"},
+                                "grid": {"left": 10, "right": 20, "top": 56, "bottom": 10, "containLabel": True},
+                                "xAxis": {
+                                    "type": "category",
+                                    "data": fechas_lideres,
+                                    "boundaryGap": False,
+                                    "axisLine": {"show": False},
+                                    "axisTick": {"show": False},
+                                    "splitLine": {"show": False},
+                                },
+                                "yAxis": {
+                                    "type": "value",
+                                    "scale": True,
+                                    "axisLine": {"show": False},
+                                    "axisTick": {"show": False},
+                                    "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
+                                },
+                                "series": [
+                                    {
+                                        "name": str(nombre),
+                                        "type": "line",
+                                        "showSymbol": False,
+                                        "connectNulls": False,
+                                        "data": [None if pd.isna(v) else float(v) for v in tendencia_clientes[nombre]],
+                                        "lineStyle": {"color": DASHBOARD_LINE_COLORS[i % len(DASHBOARD_LINE_COLORS)], "width": 2},
+                                        "itemStyle": {"color": DASHBOARD_LINE_COLORS[i % len(DASHBOARD_LINE_COLORS)]},
+                                    }
+                                    for i, nombre in enumerate(tendencia_clientes.columns)
+                                ],
+                            }
+                            _dashboard_echarts(option_tend_lideres, 500, key=f"tend_lideres_{col}")
                             datos_lideres_descarga = tendencia_clientes.reset_index().rename(columns={'fecha': 'Fecha'})
                             st.download_button(
                                 "Descargar datos de los 5 clientes líderes",
@@ -4724,3 +5040,37 @@ elif seccion == "Gestión Comercial":
 
     cfg_activa = GARANTIAS_CONFIG if vista_cartera_garantias == "Garantías" else CARTERA_CONFIG
     render_salud_ciclo_vida(cfg_activa)
+
+# Se ejecuta al final para resetear el scroll después de renderizar la nueva sección.
+if _should_scroll_top:
+    components.html(
+        f"""
+        <script>
+            // seccion: {escape(seccion)}
+            (function () {{
+                const win = window.parent;
+                const doc = win.document;
+                let stop = false;
+                const halt = () => {{ stop = true; }};
+                ['wheel', 'touchstart', 'keydown', 'mousedown'].forEach((evt) =>
+                    doc.addEventListener(evt, halt, {{ once: true, passive: true }})
+                );
+
+                function toTop() {{
+                    if (stop) return;
+                    doc.querySelectorAll('*').forEach((node) => {{
+                        if (node.scrollTop > 0 && node.scrollHeight > node.clientHeight) {{
+                            node.scrollTop = 0;
+                        }}
+                    }});
+                    win.scrollTo(0, 0);
+                }}
+
+                toTop();
+                const timer = setInterval(toTop, 100);
+                setTimeout(() => {{ clearInterval(timer); }}, 4000);
+            }})();
+        </script>
+        """,
+        height=0,
+    )
