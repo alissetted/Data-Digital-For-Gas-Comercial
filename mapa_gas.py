@@ -27,7 +27,7 @@ from streamlit_sortables import sort_items
 from streamlit_echarts import JsCode, st_echarts
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Clientes Activos y Consumos Anuales", layout="wide")
+st.set_page_config(page_title="Mexcom Facherito", layout="wide")
 
 st.markdown("""
 <style>
@@ -298,6 +298,29 @@ st.markdown("""
     div[data-testid="stSegmentedControl"] button:hover {
         transform: translateY(-1px);
         transition: all 0.15s ease;
+    }
+    /* Botones de exportacion minimalistas para cabeceras de renovacion */
+    div[class*="st-key-renov_no_auto_header"] div[data-testid="stDownloadButton"],
+    div[class*="st-key-renov_auto_header"] div[data-testid="stDownloadButton"] {
+        display: flex;
+        justify-content: flex-end;
+    }
+    div[class*="st-key-renov_no_auto_header"] div[data-testid="stDownloadButton"] > button,
+    div[class*="st-key-renov_auto_header"] div[data-testid="stDownloadButton"] > button {
+        border-radius: 10px !important;
+        border: 1px solid #D7E4F3 !important;
+        background: #FFFFFF !important;
+        color: #334155 !important;
+        font-size: 0.82rem !important;
+        font-weight: 600 !important;
+        min-height: 32px !important;
+        padding: 0.2rem 0.65rem !important;
+        box-shadow: none !important;
+    }
+    div[class*="st-key-renov_no_auto_header"] div[data-testid="stDownloadButton"] > button:hover,
+    div[class*="st-key-renov_auto_header"] div[data-testid="stDownloadButton"] > button:hover {
+        border-color: #BFD7F1 !important;
+        background: #F8FBFF !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1226,7 +1249,16 @@ def _dialog_manage_columns(columnas_disponibles, columnas_default, columnas_stat
             # el componente conserva el orden/estado anterior.
             sortable_key = "gestion_cols_sort_" + "|".join(etiquetas_sel)
             with st.container(height=320):
-                etiquetas_orden = sort_items(etiquetas_sel, key=sortable_key)
+                etiquetas_orden = sort_items(
+                    etiquetas_sel,
+                    key=sortable_key,
+                    custom_style="""
+                    .sortable-item, .sortable-item:hover {
+                        background-color: #0077CC;
+                        color: #FFFFFF;
+                    }
+                    """,
+                )
             draft = [etiqueta_a_columna[e] for e in etiquetas_orden]
         else:
             st.info("Aún no hay columnas seleccionadas.")
@@ -1690,7 +1722,6 @@ def _dibujar_kml(parent, datos_kml, carpetas_visibles):
 
 
 # --- Conexión a la base de datos (pyodbc) ---
-@st.cache_resource
 def get_connection():
     cfg = st.secrets["denodo"]
     conn_str = (
@@ -1705,6 +1736,14 @@ def get_connection():
     return pyodbc.connect(conn_str)
 
 
+def read_sql(query):
+    conn = get_connection()
+    try:
+        return pd.read_sql(query, conn)
+    finally:
+        conn.close()
+
+
 # --- Carga de datos con caché ---
 # cache_resource: devuelve el MISMO objeto en cada rerun (sin copiar/deserializar
 # los DataFrames grandes cada vez). Los consumidores no lo mutan in place.
@@ -1717,16 +1756,14 @@ def cargar_datos():
     cualquier rango de fechas exacto. Los distintos periodos (totales,
     mensuales) se construyen sobre la marcha a partir de este detalle
     diario (ver `construir_consumo_mensual`)."""
-    conn = get_connection()
-
     cols = COLS_CLIENTES
 
-    r = pd.read_sql(
+    r = read_sql(
         f"SELECT {', '.join(cols + ['status'])} "
-        "FROM bv_hop_registroclientes", conn
+        "FROM bv_hop_registroclientes"
     )
 
-    con = pd.read_sql(
+    con = read_sql(
         "SELECT "
         "    id_instalacion, "
         "    EXTRACT(YEAR FROM fecha) AS anio, "
@@ -1740,8 +1777,7 @@ def cargar_datos():
         "    id_instalacion, "
         "    EXTRACT(YEAR FROM fecha), "
         "    EXTRACT(MONTH FROM fecha), "
-        "    EXTRACT(DAY FROM fecha) ",
-        conn
+        "    EXTRACT(DAY FROM fecha) "
     )
 
     con = con.rename(columns=lambda c: str(c).strip())
@@ -1810,12 +1846,10 @@ def cargar_datos_garantias():
       - 'zona' se deriva de `ldc` (en vez de `zona_vpm`).
       - 'status_norm' usa `normalizar_status_garantia_serie` (3 categorías
         reales: Vigente/Liberado/Vencido, más 'Sin status')."""
-    conn = get_connection()
-
     cols = COLS_GARANTIA
 
-    df = pd.read_sql(
-        f"SELECT {', '.join(cols)} FROM bv_hop_garantia", conn
+    df = read_sql(
+        f"SELECT {', '.join(cols)} FROM bv_hop_garantia"
     )
 
     df = df.dropna(subset=['razon_social'])
@@ -3109,6 +3143,23 @@ def _degradado_radial(hex_color, oscuro=-0.08, claro=0.12):
     }
 
 
+def _degradado_radial_donut(hex_color, cx, cy, r_out, r_in, oscuro=-0.15, claro=0.22):
+    """Degradado radial global: más oscuro junto al hueco y más claro al exterior."""
+    frac_in = r_in / r_out
+    frac_mid = frac_in + (1 - frac_in) * 0.5
+    return {
+        "type": "radial",
+        "x": cx, "y": cy, "r": r_out,
+        "global": True,
+        "colorStops": [
+            {"offset": 0.0, "color": _mezclar(hex_color, oscuro)},
+            {"offset": frac_in, "color": _mezclar(hex_color, oscuro)},
+            {"offset": frac_mid, "color": hex_color},
+            {"offset": 1.0, "color": _mezclar(hex_color, claro)},
+        ],
+    }
+
+
 def _degradado_lineal(hex_color, oscuro=-0.08, claro=0.12, vertical=False):
     return {
         "type": "linear",
@@ -3572,12 +3623,11 @@ def render_salud_ciclo_vida(cfg):
             )
 
         st.write("")
-        st.markdown("**Renovación No Automática**")
 
         alertas_det = alertas.copy()
         alertas_det["riesgo_vencimiento"] = alertas_det["dias_restantes"].apply(_nivel_riesgo_vencimiento)
         alertas_det = alertas_det.sort_values("dias_restantes", ascending=True)
-        
+
         # Crear mapping de renombre dinámico
         col_nombre_actual = 'bp' if 'bp' in alertas_det.columns else 'razon_social'
         rename_mapping = {
@@ -3589,8 +3639,26 @@ def render_salud_ciclo_vida(cfg):
             "riesgo_vencimiento": "Riesgo de vencimiento",
         }
 
+        alertas_det_export = alertas_det.rename(columns=rename_mapping)
+        no_auto_excel = _excel_bytes_desde_hojas(
+            {"Renovacion No Automatica": alertas_det_export}
+        )
+
+        with st.container(key="renov_no_auto_header"):
+            col_titulo_no_auto, col_btn_no_auto = st.columns([0.82, 0.18])
+            with col_titulo_no_auto:
+                st.markdown("**Renovación No Automática**")
+            with col_btn_no_auto:
+                st.download_button(
+                    label="Export",
+                    data=no_auto_excel,
+                    file_name=f"renovacion_no_automatica_{date.today():%Y%m%d}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_renovacion_no_automatica",
+                )
+
         st.dataframe(
-            alertas_det.rename(columns=rename_mapping),
+            alertas_det_export,
             use_container_width=True,
             hide_index=True,
             height=min(400, 44 + 35 * len(alertas)),
@@ -3603,7 +3671,44 @@ def render_salud_ciclo_vida(cfg):
         )
 
     st.write("")
-    st.markdown("**Renovación automática**")
+
+    if alertas_automatica.empty:
+        alertas_automatica_export = pd.DataFrame()
+        automatica_excel = b""
+    else:
+        alertas_automatica_det_preview = alertas_automatica.copy()
+        alertas_automatica_det_preview["riesgo_vencimiento"] = alertas_automatica_det_preview["dias_restantes"].apply(
+            _nivel_riesgo_vencimiento
+        )
+        alertas_automatica_det_preview = alertas_automatica_det_preview.sort_values("dias_restantes", ascending=True)
+        col_nombre_actual_preview = 'bp' if 'bp' in alertas_automatica_det_preview.columns else 'razon_social'
+        rename_mapping_preview = {
+            col_nombre_actual_preview: "Cliente",
+            "zona": cfg["col_rename_label"],
+            "vigencia": "Fecha Vigencia",
+            "dias_restantes": "Días restantes",
+            "renovacion": "Renovación",
+            "riesgo_vencimiento": "Riesgo de vencimiento",
+        }
+        alertas_automatica_export = alertas_automatica_det_preview.rename(columns=rename_mapping_preview)
+        automatica_excel = _excel_bytes_desde_hojas(
+            {"Renovacion Automatica": alertas_automatica_export}
+        )
+
+    with st.container(key="renov_auto_header"):
+        col_titulo_auto, col_btn_auto = st.columns([0.82, 0.18])
+        with col_titulo_auto:
+            st.markdown("**Renovación automática**")
+        with col_btn_auto:
+            st.download_button(
+                label="Export",
+                data=automatica_excel,
+                file_name=f"renovacion_automatica_{date.today():%Y%m%d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_renovacion_automatica",
+                disabled=alertas_automatica.empty,
+            )
+
     if alertas_automatica.empty:
         st.info(
             f"No hay clientes activos con vigencia venciendo en los próximos {dias_alerta} días y renovación automática."
@@ -4750,17 +4855,39 @@ elif seccion == "Dashboard":
                         x_labels = [month_to_spanish_label(str(m)) for m in serie_mensual.index]
                         option_evol = {
                             "tooltip": {
-                                **DASHBOARD_TOOLTIP,
-                                "trigger": "item",
-                                "formatter": JsCode("function (p) { return '<b>' + p.name + '</b><br>' + Number(p.value).toLocaleString('en-US', {maximumFractionDigits: 0}) + ' GJ'; }"),
+                                "trigger": "axis",
+                                "axisPointer": {
+                                    "type": "line",
+                                    "lineStyle": {"color": "#7FB4D8", "width": 1},
+                                },
+                                "backgroundColor": "#111827",
+                                "borderColor": "#111827",
+                                "textStyle": {"color": "#FFFFFF", "fontSize": 12},
+                                "formatter": JsCode(
+                                    "function (params) {"
+                                    " var points = Array.isArray(params) ? params : [params];"
+                                    " var point = points[0];"
+                                    " var value = Number(point.value).toLocaleString('es-MX', {maximumFractionDigits: 0});"
+                                    " return '<b>' + point.axisValue + '</b><br>' + point.marker + 'Volumen: ' + value + ' GJ';"
+                                    " }"
+                                ),
                             },
-                            "grid": {"left": 10, "right": 10, "top": 56, "bottom": 10, "containLabel": True},
+                            "grid": {"left": 86, "right": 34, "top": 56, "bottom": 52, "containLabel": True},
                             "xAxis": {
                                 "type": "category",
                                 "data": x_labels,
                                 "boundaryGap": False,
                                 "axisLine": {"show": False},
                                 "axisTick": {"show": False},
+                                "axisLabel": {
+                                    "margin": 12,
+                                    "hideOverlap": False,
+                                    "showMinLabel": True,
+                                    "showMaxLabel": True,
+                                    "formatter": JsCode(
+                                        "function (value) { var parts = String(value).split(' '); if (parts.length >= 2) { return parts[0] + '\\n' + parts.slice(1).join(' '); } return value; }"
+                                    ),
+                                },
                                 "splitLine": {"show": False},
                             },
                             "yAxis": {
@@ -4768,13 +4895,18 @@ elif seccion == "Dashboard":
                                 "name": "Volumen (GJ)",
                                 "nameLocation": "middle",
                                 "nameRotate": 90,
-                                "nameGap": 70,
+                                "nameGap": 118,
+                                "nameTextStyle": {"fontWeight": 600, "color": "#334155", "fontSize": 12},
                                 "min": 0,
+                                "axisLabel": {
+                                    "formatter": JsCode("function (v) { return Number(v).toLocaleString('en-US'); }"),
+                                },
                                 "axisLine": {"show": False},
                                 "axisTick": {"show": False},
                                 "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
                             },
                             "series": [{
+                                "name": "Volumen",
                                 "type": "line",
                                 "data": [float(v) for v in serie_mensual.values],
                                 "symbol": "circle",
@@ -4801,13 +4933,27 @@ elif seccion == "Dashboard":
                             st.info("Sin volumen por zona.")
                         else:
                             total_zona = float(vol_zona.sum())
+                            DONUT_CX, DONUT_CY = 230, 198
+                            DONUT_R_IN, DONUT_R_OUT = 72, 162
+                            # Color de respaldo distinto para zonas sin color definido (ej. Mayakan),
+                            # para que no se confunda con el azul de Zona 8.
+                            colores_donut_extra = {"Zona Mayakan": "#00897B"}
                             data_donut = []
                             for z, v in vol_zona.items():
-                                item = {"name": z, "value": float(v), "itemStyle": {"color": _degradado_radial(ZONA_COLORS.get(z, "#0077CC"))}}
+                                color_z = ZONA_COLORS.get(z, colores_donut_extra.get(z, "#0077CC"))
+                                item = {
+                                    "name": z,
+                                    "value": float(v),
+                                    "itemStyle": {"color": _degradado_radial_donut(
+                                        color_z, DONUT_CX, DONUT_CY, DONUT_R_OUT, DONUT_R_IN,
+                                        oscuro=-0.30, claro=0.40,
+                                    )},
+                                }
                                 if v / total_zona < 0.05:
                                     item["label"] = {"position": "outside", "color": "#333333"}
                                     item["labelLine"] = {"show": True, "length": 8, "length2": 6}
                                 data_donut.append(item)
+
                             option_donut = {
                                 "tooltip": {
                                     **DASHBOARD_TOOLTIP,
@@ -4817,9 +4963,10 @@ elif seccion == "Dashboard":
                                 "legend": {"orient": "vertical", "right": 10, "top": "middle", "selectedMode": False, "textStyle": {"color": "#1F2937"}},
                                 "series": [{
                                     "type": "pie",
-                                    "radius": ["38%", "85%"],
-                                    "center": ["40%", "52%"],
-                                    "padAngle": 3,
+                                    "radius": [DONUT_R_IN, DONUT_R_OUT],
+                                    "center": [DONUT_CX, DONUT_CY],
+                                    "padAngle": 2.3,
+                                    "minAngle": 5,
                                     "percentPrecision": 1,
                                     "selectedMode": "single",
                                     "itemStyle": {"borderRadius": 10, "shadowBlur": 20, "shadowColor": "rgba(0,0,0,0.15)", "shadowOffsetY": 6},
@@ -4878,7 +5025,25 @@ elif seccion == "Dashboard":
                     st.markdown("---")
 
                     # ----- Tendencia diaria de consumo (detalle dia a dia) -----
-                    ids_grupo = base_top['id_instalacion'].dropna().unique().tolist()
+                    base_tendencia = base_top.rename(
+                        columns={'tipo_de_cliente': 'Segmentación'}
+                    ).copy()
+                    opciones_segmentacion = (
+                        sorted(
+                            base_tendencia['Segmentación'].dropna().astype(str).unique().tolist(),
+                            key=str.casefold,
+                        )
+                        if 'Segmentación' in base_tendencia.columns else []
+                    )
+                    key_segmentacion = f"segmentacion_tendencia_{col}"
+                    if key_segmentacion not in st.session_state:
+                        st.session_state[key_segmentacion] = list(opciones_segmentacion)
+                    else:
+                        st.session_state[key_segmentacion] = [
+                            valor for valor in st.session_state[key_segmentacion]
+                            if valor in opciones_segmentacion
+                        ]
+
                     mask_fecha = pd.Series(True, index=consumo_diario.index)
                     if col == 'Consumo_Total_Periodo_GJ':
                         if fecha_ini and fecha_fin:
@@ -4900,84 +5065,78 @@ elif seccion == "Dashboard":
                                     & (consumo_diario['fecha'].dt.date <= fecha_fin)
                                 )
 
-                    diario_grupo = consumo_diario[
-                        consumo_diario['id_instalacion'].isin(ids_grupo) & mask_fecha
-                    ]
+                    columnas_tendencia = st.columns([5, 1])
+                    with columnas_tendencia[0]:
+                        st.markdown("**📈 Tendencia diaria de consumo**")
+                    seleccion_count = len(st.session_state[key_segmentacion])
+                    with columnas_tendencia[1]:
+                        with st.popover(
+                            f"Segmentación ({seleccion_count}/{len(opciones_segmentacion)})",
+                            disabled=not opciones_segmentacion,
+                        ):
+                            botones_segmentacion = st.columns(2)
+                            with botones_segmentacion[0]:
+                                if st.button(
+                                    "Seleccionar todo",
+                                    key=f"segmentacion_todo_{col}",
+                                    disabled=not opciones_segmentacion,
+                                    use_container_width=True,
+                                ):
+                                    for valor in opciones_segmentacion:
+                                        st.session_state[f"{key_segmentacion}_opcion_{valor}"] = True
+                            with botones_segmentacion[1]:
+                                if st.button(
+                                    "Limpiar selección",
+                                    key=f"segmentacion_limpiar_{col}",
+                                    disabled=not opciones_segmentacion,
+                                    use_container_width=True,
+                                ):
+                                    for valor in opciones_segmentacion:
+                                        st.session_state[f"{key_segmentacion}_opcion_{valor}"] = False
+                            segmentaciones_sel = []
+                            for valor in opciones_segmentacion:
+                                key_opcion = f"{key_segmentacion}_opcion_{valor}"
+                                if key_opcion not in st.session_state:
+                                    st.session_state[key_opcion] = valor in st.session_state[key_segmentacion]
+                                if st.checkbox(valor, key=key_opcion):
+                                    segmentaciones_sel.append(valor)
+                            st.session_state[key_segmentacion] = segmentaciones_sel
 
-                    st.markdown("**📈 Tendencia diaria de consumo**")
-                    if diario_grupo.empty:
-                        st.caption("Sin detalle diario disponible para graficar la tendencia de este periodo.")
+                    if not segmentaciones_sel:
+                        st.info("Selecciona al menos una segmentación")
                     else:
-                        tendencia_total = (
-                            diario_grupo.groupby('fecha')['consumo_gj'].sum()
-                            .rename('Consumo (GJ)')
-                            .sort_index()
-                        )
-                        st.caption(f"Consumo diario total {zona_txt} - {nombre_consumo(col)}")
-                        fechas_total = [pd.Timestamp(f).strftime("%Y-%m-%d") for f in tendencia_total.index]
-                        option_tend_total = {
-                            "tooltip": {**DASHBOARD_TOOLTIP, "trigger": "axis"},
-                            "grid": {"left": 10, "right": 20, "top": 56, "bottom": 10, "containLabel": True},
-                            "xAxis": {
-                                "type": "category",
-                                "data": fechas_total,
-                                "boundaryGap": False,
-                                "axisLine": {"show": False},
-                                "axisTick": {"show": False},
-                                "splitLine": {"show": False},
-                            },
-                            "yAxis": {
-                                "type": "value",
-                                "scale": True,
-                                "axisLine": {"show": False},
-                                "axisTick": {"show": False},
-                                "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
-                            },
-                            "series": [{
-                                "name": "Consumo (GJ)",
-                                "type": "line",
-                                "showSymbol": False,
-                                "data": [float(v) for v in tendencia_total.values],
-                                "lineStyle": {"color": "#007BC5", "width": 2},
-                                "itemStyle": {"color": "#007BC5"},
-                            }],
-                        }
-                        _dashboard_echarts(option_tend_total, 500, key=f"tend_total_{col}")
-                        datos_total_descarga = tendencia_total.rename('Consumo_GJ').reset_index()
-                        datos_total_descarga.columns = ['Fecha', 'Consumo_GJ']
-                        st.download_button(
-                            "Descargar datos del consumo diario",
-                            _excel_bytes_desde_hojas({'Tendencia_total': datos_total_descarga}),
-                            "tendencia_diaria_consumo.xlsx",
-                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"dl_tendencia_total_{col}",
-                            use_container_width=False,
-                        )
+                        base_segmentada = base_tendencia[
+                            base_tendencia['Segmentación'].astype(str).isin(segmentaciones_sel)
+                        ]
+                        ids_grupo = base_segmentada['id_instalacion'].dropna().unique().tolist()
+                        diario_grupo = consumo_diario[
+                            consumo_diario['id_instalacion'].isin(ids_grupo) & mask_fecha
+                        ]
 
-                        top_lideres = top['bp'].dropna().head(5).tolist()
-                        top_ids = (
-                            base_top[base_top['bp'].isin(top_lideres)]
-                            [['id_instalacion', 'bp']]
-                            .drop_duplicates()
-                        )
-                        diario_top = diario_grupo.merge(top_ids, on='id_instalacion', how='inner')
-                        if not diario_top.empty:
-                            tendencia_clientes = (
-                                diario_top.groupby(['fecha', 'bp'])['consumo_gj'].sum()
-                                .reset_index()
-                                .pivot(index='fecha', columns='bp', values='consumo_gj')
+                        if diario_grupo.empty:
+                            st.caption("Sin detalle diario disponible para graficar la tendencia de este periodo.")
+                        else:
+                            fechas_eje = pd.DatetimeIndex(
+                                diario_grupo['fecha'].drop_duplicates().sort_values()
+                            )
+                            tendencia_total = (
+                                diario_grupo.groupby('fecha')['consumo_gj'].sum()
+                                .reindex(fechas_eje, fill_value=0)
+                                .rename('Consumo (GJ)')
                                 .sort_index()
                             )
-                            st.caption("Tendencia diaria de los 5 clientes líderes del periodo")
-                            fechas_lideres = [pd.Timestamp(f).strftime("%Y-%m-%d") for f in tendencia_clientes.index]
-                            option_tend_lideres = {
-                                "legend": {"top": 0, "textStyle": {"color": "#1F2937"}},
+                            st.caption(f"Consumo diario total {zona_txt} - {nombre_consumo(col)}")
+                            fechas_total = [pd.Timestamp(f).strftime("%Y-%m-%d") for f in fechas_eje]
+                            option_tend_total = {
                                 "tooltip": {**DASHBOARD_TOOLTIP, "trigger": "axis"},
-                                "grid": {"left": 10, "right": 20, "top": 56, "bottom": 10, "containLabel": True},
+                                "grid": {"left": 65, "right": 20, "top": 56, "bottom": 35, "containLabel": True},
                                 "xAxis": {
                                     "type": "category",
-                                    "data": fechas_lideres,
+                                    "data": fechas_total,
                                     "boundaryGap": False,
+                                    "name": "Fecha",
+                                    "nameLocation": "middle",
+                                    "nameGap": 28,
                                     "axisLine": {"show": False},
                                     "axisTick": {"show": False},
                                     "splitLine": {"show": False},
@@ -4985,33 +5144,115 @@ elif seccion == "Dashboard":
                                 "yAxis": {
                                     "type": "value",
                                     "scale": True,
+                                    "name": "Consumo (GJ)",
+                                    "nameLocation": "middle",
+                                    "nameRotate": 90,
+                                    "nameGap": 85,
                                     "axisLine": {"show": False},
                                     "axisTick": {"show": False},
                                     "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
                                 },
-                                "series": [
-                                    {
-                                        "name": str(nombre),
-                                        "type": "line",
-                                        "showSymbol": False,
-                                        "connectNulls": False,
-                                        "data": [None if pd.isna(v) else float(v) for v in tendencia_clientes[nombre]],
-                                        "lineStyle": {"color": DASHBOARD_LINE_COLORS[i % len(DASHBOARD_LINE_COLORS)], "width": 2},
-                                        "itemStyle": {"color": DASHBOARD_LINE_COLORS[i % len(DASHBOARD_LINE_COLORS)]},
-                                    }
-                                    for i, nombre in enumerate(tendencia_clientes.columns)
-                                ],
+                                "series": [{
+                                    "name": "Consumo (GJ)",
+                                    "type": "line",
+                                    "showSymbol": False,
+                                    "data": [float(v) for v in tendencia_total.values],
+                                    "lineStyle": {"color": "#007BC5", "width": 2},
+                                    "itemStyle": {"color": "#007BC5"},
+                                }],
                             }
-                            _dashboard_echarts(option_tend_lideres, 500, key=f"tend_lideres_{col}")
-                            datos_lideres_descarga = tendencia_clientes.reset_index().rename(columns={'fecha': 'Fecha'})
+                            _dashboard_echarts(option_tend_total, 500, key=f"tend_total_{col}")
+                            datos_total_descarga = tendencia_total.rename('Consumo_GJ').reset_index()
+                            datos_total_descarga.columns = ['Fecha', 'Consumo_GJ']
                             st.download_button(
-                                "Descargar datos de los 5 clientes líderes",
-                                _excel_bytes_desde_hojas({'Top_5_lideres': datos_lideres_descarga}),
-                                "tendencia_diaria_top_5_clientes.xlsx",
+                                "Descargar datos del consumo diario",
+                                _excel_bytes_desde_hojas({'Tendencia_total': datos_total_descarga}),
+                                "tendencia_diaria_consumo.xlsx",
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"dl_tendencia_lideres_{col}",
+                                key=f"dl_tendencia_total_{col}",
                                 use_container_width=False,
                             )
+
+                            meta_clientes = base_segmentada[
+                                ['id_instalacion', 'bp']
+                            ].dropna(subset=['id_instalacion', 'bp']).drop_duplicates()
+                            diario_clientes = diario_grupo.merge(
+                                meta_clientes, on='id_instalacion', how='inner'
+                            )
+                            top_lideres = (
+                                diario_clientes.groupby('bp')['consumo_gj'].sum()
+                                .sort_values(ascending=False)
+                                .head(5)
+                                .index.tolist()
+                            )
+                            diario_top = diario_clientes[diario_clientes['bp'].isin(top_lideres)]
+                            if not diario_top.empty:
+                                tendencia_clientes = (
+                                    diario_top.groupby(['fecha', 'bp'])['consumo_gj'].sum()
+                                    .reset_index()
+                                    .pivot(index='fecha', columns='bp', values='consumo_gj')
+                                    .reindex(index=fechas_eje)
+                                    .sort_index()
+                                )
+                                st.caption("Tendencia diaria de los 5 clientes líderes del periodo")
+                                fechas_lideres = fechas_total
+                                clientes_ordenados = sorted(
+                                    base_tendencia['bp'].dropna().astype(str).unique().tolist(),
+                                    key=str.casefold,
+                                )
+                                colores_cliente = {
+                                    nombre: DASHBOARD_LINE_COLORS[i % len(DASHBOARD_LINE_COLORS)]
+                                    for i, nombre in enumerate(clientes_ordenados)
+                                }
+                                option_tend_lideres = {
+                                    "legend": {"top": 0, "textStyle": {"color": "#1F2937"}},
+                                    "tooltip": {**DASHBOARD_TOOLTIP, "trigger": "axis"},
+                                    "grid": {"left": 65, "right": 20, "top": 56, "bottom": 35, "containLabel": True},
+                                    "xAxis": {
+                                        "type": "category",
+                                        "data": fechas_lideres,
+                                        "boundaryGap": False,
+                                        "name": "Fecha",
+                                        "nameLocation": "middle",
+                                        "nameGap": 28,
+                                        "axisLine": {"show": False},
+                                        "axisTick": {"show": False},
+                                        "splitLine": {"show": False},
+                                    },
+                                    "yAxis": {
+                                        "type": "value",
+                                        "scale": True,
+                                        "name": "Consumo (GJ)",
+                                        "nameLocation": "middle",
+                                        "nameRotate": 90,
+                                        "nameGap": 85,
+                                        "axisLine": {"show": False},
+                                        "axisTick": {"show": False},
+                                        "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
+                                    },
+                                    "series": [
+                                        {
+                                            "name": str(nombre),
+                                            "type": "line",
+                                            "showSymbol": False,
+                                            "connectNulls": False,
+                                            "data": [None if pd.isna(v) else float(v) for v in tendencia_clientes[nombre]],
+                                            "lineStyle": {"color": colores_cliente.get(str(nombre), DASHBOARD_LINE_COLORS[0]), "width": 2},
+                                            "itemStyle": {"color": colores_cliente.get(str(nombre), DASHBOARD_LINE_COLORS[0])},
+                                        }
+                                        for nombre in tendencia_clientes.columns
+                                    ],
+                                }
+                                _dashboard_echarts(option_tend_lideres, 500, key=f"tend_lideres_{col}")
+                                datos_lideres_descarga = tendencia_clientes.reset_index().rename(columns={'fecha': 'Fecha'})
+                                st.download_button(
+                                    "Descargar datos de los 5 clientes líderes",
+                                    _excel_bytes_desde_hojas({'Top_5_lideres': datos_lideres_descarga}),
+                                    "tendencia_diaria_top_5_clientes.xlsx",
+                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=f"dl_tendencia_lideres_{col}",
+                                    use_container_width=False,
+                                )
     elif cols_consumo and df_geo.empty:
         st.info("No hay coordenadas para calcular el Top 10 por zona.")
     elif cols_consumo:

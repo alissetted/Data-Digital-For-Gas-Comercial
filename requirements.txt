@@ -11,6 +11,5 @@ branca==0.8.2
 shapely==2.0.4
 plotly==6.9.0
 pillow==12.3.0
-openpyxl==3.1.5
 xlsxwriter==3.2.9
 fpdf2==2.8.7
