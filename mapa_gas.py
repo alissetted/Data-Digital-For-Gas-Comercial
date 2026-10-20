@@ -915,12 +915,24 @@ _ENGIE_TABLA_JS = """
     ths.forEach(function (th, i) {
         if (th.textContent.trim() === "Cliente") indicesCliente.push(i);
     });
-    if (indicesCliente.length) {
+
+    // Medir con la tabla oculta da 0 px y colapsa columnas; esperar a que tenga ancho.
+    function ajustarClienteInicial() {
+        if (anchos != null || !indicesCliente.length) return true;
+        if (table.getBoundingClientRect().width === 0) return false;
         fijar();
         indicesCliente.forEach(function (i) {
             if (anchos[i] != null) anchos[i] = anchos[i] * 0.55;
         });
         sincronizar();
+        return true;
+    }
+
+    if (!ajustarClienteInicial() && typeof ResizeObserver !== "undefined") {
+        var observador = new ResizeObserver(function () {
+            if (ajustarClienteInicial()) observador.disconnect();
+        });
+        observador.observe(table);
     }
 })();
 """
