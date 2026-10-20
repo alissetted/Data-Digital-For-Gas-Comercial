@@ -497,6 +497,16 @@ st.markdown(
         margin: 0.1rem 0 0.2rem;
         opacity: 0.5;
     }
+    /* Espacio superior por defecto de Streamlit (block container + h1) */
+    div[data-testid="stMainBlockContainer"],
+    .block-container {
+        padding-top: 4rem !important;
+    }
+    div[data-testid="stMainBlockContainer"] h1,
+    .block-container h1 {
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -1574,6 +1584,15 @@ def normalizar_zona_clave(valor):
 def normalizar_zona_clave_serie(serie):
     """Version vectorizada de `normalizar_zona_clave` para Series."""
     return serie.map(normalizar_zona_clave)
+
+
+def _orden_zona_natural(nombre_zona):
+    """Clave de orden para etiquetas tipo 'Zona N' (N numerico ascendente)."""
+    texto = str(nombre_zona or "").strip()
+    m = re.search(r"^zona\s*(\d+)\s*$", texto, flags=re.IGNORECASE)
+    if m:
+        return (0, int(m.group(1)), texto.casefold())
+    return (1, float("inf"), texto.casefold())
 
 
 def _estilo_capa_kml(nombre_capa):
@@ -2809,6 +2828,10 @@ seccion_guardada = SECCIONES_SIDEBAR_LEGACY.get(seccion_guardada, seccion_guarda
 st.session_state["sidebar_selected_section_gas"] = (
     seccion_guardada if seccion_guardada in SECCIONES_SIDEBAR else SECCIONES_SIDEBAR[0]
 )
+def _seleccionar_seccion(nombre):
+    st.session_state["sidebar_selected_section_gas"] = nombre
+
+
 with st.sidebar:
     with st.container(key="sidebar_brand_block"):
         logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_engie_blanco.png")
@@ -2828,10 +2851,13 @@ with st.sidebar:
         for idx, section_name in enumerate(SECCIONES_SIDEBAR):
             state_suffix = "active" if section_name == st.session_state["sidebar_selected_section_gas"] else "inactive"
             with st.container(key=f"sidebar_nav_item_{idx}_{state_suffix}"):
-                if st.button(section_name, key=f"sidebar_nav_btn_gas_{idx}", use_container_width=True):
-                    if st.session_state["sidebar_selected_section_gas"] != section_name:
-                        st.session_state["sidebar_selected_section_gas"] = section_name
-                        st.rerun()
+                st.button(
+                    section_name,
+                    key=f"sidebar_nav_btn_gas_{idx}",
+                    on_click=_seleccionar_seccion,
+                    args=(section_name,),
+                    use_container_width=True,
+                )
     seccion = st.session_state["sidebar_selected_section_gas"]
     st.divider()
     periodo_sidebar_container = st.container(key="sidebar_period_section")
@@ -2856,7 +2882,13 @@ if selected_status_gas:
 else:
     resultado = resultado.iloc[0:0].copy()
 
-st.title("Registro de Clientes y Consumos Diarios")
+TITULOS_SECCION = {
+    "Mapa": "Mapa de Consumo Gas Natural",
+    "Reportes": "Reportes Personalizados",
+    "Dashboard": "Dashboards",
+    "Gestión Comercial": "Salud de la Cartera de Clientes",
+}
+st.title(TITULOS_SECCION.get(seccion, "Registro de Clientes y Consumos Diarios"))
 
 # Nota: el filtro por Id de Instalación se define de forma independiente
 # dentro de cada sección (Mapa, Clientes, Top 10), para que no afecte a las demás.
@@ -2942,7 +2974,8 @@ zonas_extra = sorted(
     {z for z in zonas_datos if z not in ZONAS},
     key=lambda x: x.casefold(),
 )
-opciones_zona = ["Vista general"] + list(ZONAS.keys()) + zonas_extra
+zonas_ordenadas = sorted(ZONAS.keys(), key=_orden_zona_natural)
+opciones_zona = ["Vista general"] + zonas_ordenadas + zonas_extra
 if "zona_widget" not in st.session_state:
     st.session_state.zona_widget = "Vista general"
 if "zona_widget_multi" not in st.session_state:
@@ -2953,6 +2986,47 @@ if st.session_state.zona_widget_multi:
     zona_multi_actual = st.session_state.zona_widget_multi[0]
     if zona_multi_actual not in opciones_zona:
         st.session_state.zona_widget_multi = []
+
+def _firma_clic(p):
+    if p.get("lat") is None or p.get("lng") is None:
+        return None
+    return (round(p["lat"], 6), round(p["lng"], 6))
+
+
+def _es_centinela(sig):
+    # El botón 🏠 emite un clic cerca de (0,0).
+    return sig is not None and abs(sig[0]) < 0.001 and abs(sig[1]) < 0.01
+
+
+# Clic en el mapa (🏠 o zona): se resuelve aquí, antes del selector de zona,
+# para aplicarlo en la misma ejecución sin st.rerun().
+# st_folium conserva el último clic entre reruns: solo actuamos ante un clic nuevo.
+mapa_evento = st.session_state.get("mapa_zonas") if seccion == "Mapa" else None
+if not isinstance(mapa_evento, dict):
+    mapa_evento = {}
+click_obj = mapa_evento.get("last_object_clicked") or {}
+click_map = mapa_evento.get("last_clicked") or {}
+sig_obj = _firma_clic(click_obj)
+sig_map = _firma_clic(click_map)
+
+# 1) Botón "home" (🏠): clic centinela en last_clicked -> Vista general.
+if _es_centinela(sig_map) and sig_map != st.session_state.get("sig_home_proc"):
+    st.session_state.sig_home_proc = sig_map
+    if st.session_state.get("zona_widget") != "Vista general":
+        st.session_state.pending_zona = "Vista general"
+
+# 2) Selección de zona por clic sobre una geometría del mapa.
+sig_zona, click_zona = None, None
+if sig_obj is not None and not _es_centinela(sig_obj):
+    sig_zona, click_zona = sig_obj, click_obj
+elif sig_map is not None and not _es_centinela(sig_map):
+    sig_zona, click_zona = sig_map, click_map
+
+if sig_zona is not None and sig_zona != st.session_state.get("sig_zona_proc"):
+    st.session_state.sig_zona_proc = sig_zona
+    nueva_zona = zona_de_click(click_zona["lng"], click_zona["lat"])
+    if nueva_zona and nueva_zona != st.session_state.get("zona_widget"):
+        st.session_state.pending_zona = nueva_zona
 
 if "pending_zona" in st.session_state:
     zona_pendiente = st.session_state.pop("pending_zona")
@@ -3144,7 +3218,8 @@ def _degradado_radial(hex_color, oscuro=-0.08, claro=0.12):
 
 
 def _degradado_radial_donut(hex_color, cx, cy, r_out, r_in, oscuro=-0.15, claro=0.22):
-    """Degradado radial global: más oscuro junto al hueco y más claro al exterior."""
+    """Degradado radial global centrado en el donut: más oscuro junto al hueco
+    y más claro hacia el borde exterior. cx, cy, r_out y r_in van en píxeles."""
     frac_in = r_in / r_out
     frac_mid = frac_in + (1 - frac_in) * 0.5
     return {
@@ -3155,6 +3230,18 @@ def _degradado_radial_donut(hex_color, cx, cy, r_out, r_in, oscuro=-0.15, claro=
             {"offset": 0.0, "color": _mezclar(hex_color, oscuro)},
             {"offset": frac_in, "color": _mezclar(hex_color, oscuro)},
             {"offset": frac_mid, "color": hex_color},
+            {"offset": 1.0, "color": _mezclar(hex_color, claro)},
+        ],
+    }
+
+
+def _degradado(hex_color, oscuro=-0.18, claro=0.40):
+    return {
+        "type": "radial",
+        "x": 0.5, "y": 0.5, "r": 0.5,
+        "colorStops": [
+            {"offset": 0.0, "color": _mezclar(hex_color, oscuro)},
+            {"offset": 0.55, "color": hex_color},
             {"offset": 1.0, "color": _mezclar(hex_color, claro)},
         ],
     }
@@ -3172,14 +3259,156 @@ def _degradado_lineal(hex_color, oscuro=-0.08, claro=0.12, vertical=False):
     }
 
 
-def _dashboard_echarts(option, height, key):
+def _dashboard_echarts(option, height, key, on_select="ignore"):
     opcion = {
         "animation": False,
         "textStyle": {"fontFamily": DASHBOARD_ECHARTS_FONT},
         "toolbox": DASHBOARD_TOOLBOX,
         **option,
     }
-    st_echarts(options=opcion, height=f"{height}px", key=key)
+    if on_select == "ignore":
+        return st_echarts(options=opcion, height=f"{height}px", key=key)
+    return st_echarts(options=opcion, height=f"{height}px", key=key, on_select=on_select, selection_mode="points")
+
+
+def _fila_info_donut(etiqueta, valor, detalle=""):
+    return (
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;padding:0.3rem 0;">'
+        f'<span style="font-size:0.95rem;color:#273444;">{etiqueta}</span>'
+        f'<span style="font-size:1rem;font-weight:700;color:#17212B;white-space:nowrap;">{valor} '
+        f'<span style="color:#687586;font-weight:600;font-size:0.85rem;">{detalle}</span></span>'
+        '</div>'
+    )
+
+
+def _reset_donut(clave):
+    st.session_state[clave] = st.session_state.get(clave, 0) + 1
+
+
+@st.fragment
+def _bloque_donut_zona(col, vol_zona, clientes_zona):
+    """Donut de participación por zona + panel de detalle. Su on_select solo recarga este bloque."""
+    col_donut, col_info = st.columns([3, 2], gap="large", vertical_alignment="center")
+    zona_donut_sel = None
+
+    with col_donut:
+        if vol_zona.empty:
+            st.info("Sin volumen por zona.")
+        else:
+            total_zona = float(vol_zona.sum())
+            DONUT_CX, DONUT_CY = 230, 198      # centro en px
+            DONUT_R_IN, DONUT_R_OUT = 72, 162  # radios en px
+            # Color de respaldo distinto para zonas sin color definido (ej. Mayakan),
+            # para que no se confunda con el azul de Zona 8.
+            colores_donut_extra = {"Zona Mayakan": "#00897B"}
+            data_donut = []
+            for z, v in vol_zona.items():
+                color_z = ZONA_COLORS.get(z, colores_donut_extra.get(z, "#0077CC"))
+                item = {
+                    "name": z,
+                    "value": float(v),
+                    "itemStyle": {"color": _degradado_radial_donut(
+                        color_z, DONUT_CX, DONUT_CY, DONUT_R_OUT, DONUT_R_IN
+                    )},
+                }
+                if v / total_zona < 0.05:
+                    item["label"] = {"position": "outside", "color": "#333333"}
+                    item["labelLine"] = {"show": True, "length": 8, "length2": 6}
+                data_donut.append(item)
+
+            option_donut = {
+                "tooltip": {
+                    **DASHBOARD_TOOLTIP,
+                    "trigger": "item",
+                    "formatter": JsCode("function (p) { return '<b>' + p.name + '</b><br>' + Number(p.value).toLocaleString('en-US', {maximumFractionDigits: 0}) + ' GJ<br>' + Number(p.percent).toFixed(2) + '%'; }"),
+                },
+                "legend": {"orient": "vertical", "left": DONUT_CX + DONUT_R_OUT + 30, "top": "middle", "selectedMode": False, "textStyle": {"color": "#1F2937"}},
+                "series": [{
+                    "type": "pie",
+                    "radius": [DONUT_R_IN, DONUT_R_OUT],
+                    "center": [DONUT_CX, DONUT_CY],
+                    "padAngle": 2.8,
+                    "minAngle": 5,
+                    "percentPrecision": 1,
+                    "selectedMode": "single",
+                    "itemStyle": {"borderRadius": 10, "shadowBlur": 20, "shadowColor": "rgba(0,0,0,0.15)", "shadowOffsetY": 6},
+                    "label": {"show": True, "position": "inside", "formatter": "{d}%", "fontWeight": "bold", "fontSize": 18, "color": "#1F2937"},
+                    "labelLine": {"show": False},
+                    "emphasis": {"scale": True, "scaleSize": 6},
+                    "data": data_donut,
+                }],
+            }
+            reset_donut_key = f"donut_reset_{col}"
+            st.session_state.setdefault(reset_donut_key, 0)
+            evento_donut = _dashboard_echarts(option_donut, 440, key=f"donut_{col}_{st.session_state[reset_donut_key]}", on_select="rerun")
+            seleccion = (evento_donut or {}).get("selection") or {}
+            zona_donut_sel = next(
+                (p.get("name") for p in seleccion.get("points", []) if p.get("name") in vol_zona.index),
+                None,
+            )
+
+    if not vol_zona.empty:
+        with col_info:
+            render_info_donut(vol_zona, clientes_zona, zona_donut_sel)
+            if zona_donut_sel is not None:
+                st.button(
+                    "Ver resumen general",
+                    key=f"donut_resumen_{col}",
+                    on_click=_reset_donut,
+                    args=(f"donut_reset_{col}",),
+                )
+
+
+def _fijar_checkboxes_segmentacion(claves, valor):
+    for clave in claves:
+        st.session_state[clave] = valor
+
+
+def _fijar_capas_kml(capas, valor):
+    for capa in capas:
+        st.session_state[f"kml_{capa}"] = valor
+
+
+def render_info_donut(vol_zona, clientes_zona, zona_sel):
+    """Panel junto al donut: resumen general o detalle de la zona seleccionada."""
+    total = float(vol_zona.sum())
+    n_clientes = int(clientes_zona.sum())
+    if zona_sel in vol_zona.index:
+        vol = float(vol_zona[zona_sel])
+        n_cli = int(clientes_zona.get(zona_sel, 0))
+        posicion = list(vol_zona.index).index(zona_sel) + 1
+        color = ZONA_COLORS.get(zona_sel, "#0077CC")
+        encabezado = f"Detalle {zona_sel}"
+        resumen = f"{vol:,.0f} GJ · {vol / total:.2%}"
+        filas = [
+            _fila_info_donut("Posición", f"#{posicion}", f"de {len(vol_zona)}"),
+            _fila_info_donut("Clientes", f"{n_cli:,}"),
+            _fila_info_donut("Promedio por cliente", f"{vol / n_cli:,.1f} GJ" if n_cli else "N/D"),
+        ]
+        nota = "Usa el botón Ver resumen general para volver."
+    else:
+        color = "#0077CC"
+        encabezado = "Información general"
+        resumen = f"{total:,.0f} GJ"
+        filas = [
+            _fila_info_donut("Zonas con volumen", f"{len(vol_zona)}"),
+            _fila_info_donut("Clientes", f"{n_clientes:,}"),
+            _fila_info_donut("Zona líder", str(vol_zona.index[0]), f"{vol_zona.iloc[0] / total:.2%}"),
+            _fila_info_donut("Promedio por cliente", f"{total / n_clientes:,.1f} GJ" if n_clientes else "N/D"),
+        ]
+        nota = "Haz clic en una zona de la gráfica para ver su detalle."
+    filas_html = "".join(filas)
+    st.markdown(
+        f'<div style="background:#F8FAFC;border-left:4px solid {color};padding:0.7rem 0.9rem;border-radius:6px;">'
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">'
+        f'<span style="font-size:0.9rem;color:#6B7280;font-weight:600;text-transform:uppercase;">{encabezado}</span>'
+        f'<span style="font-size:1.1rem;color:{color};font-weight:700;white-space:nowrap;">{resumen}</span>'
+        '</div>'
+        f'<div style="margin-top:0.3rem;">{filas_html}</div>'
+        f'<div style="font-size:0.8rem;color:#6B7280;margin-top:0.5rem;">{nota}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ============================================================
@@ -3212,13 +3441,15 @@ def _nivel_riesgo_vencimiento(dias):
     return "🟢 Riesgo bajo"
 
 
+@st.fragment
 def render_salud_ciclo_vida(cfg):
     """Renderiza la vista de 'Salud y ciclo de vida' (filtro, tarjetas KPI,
     gráfico de altas/bajas, detalle histórico y alertas de vigencia),
     reutilizable tanto para Cartera como para Garantías. `cfg` concentra
     todas las diferencias entre ambas fuentes de datos (columnas, etiquetas,
     status disponibles, colores, etc.), manteniendo idéntico el layout."""
-    st.subheader(cfg["subheader"])
+    if cfg.get("subheader"):
+        st.subheader(cfg["subheader"])
     st.caption(cfg["caption"])
 
     # --- Carga de datos (con o sin spinner, según la fuente) ---
@@ -3645,7 +3876,7 @@ def render_salud_ciclo_vida(cfg):
         )
 
         with st.container(key="renov_no_auto_header"):
-            col_titulo_no_auto, col_btn_no_auto = st.columns([0.82, 0.18])
+            col_titulo_no_auto, col_btn_no_auto = st.columns([0.86, 0.14])
             with col_titulo_no_auto:
                 st.markdown("**Renovación No Automática**")
             with col_btn_no_auto:
@@ -3696,7 +3927,7 @@ def render_salud_ciclo_vida(cfg):
         )
 
     with st.container(key="renov_auto_header"):
-        col_titulo_auto, col_btn_auto = st.columns([0.82, 0.18])
+        col_titulo_auto, col_btn_auto = st.columns([0.86, 0.14])
         with col_titulo_auto:
             st.markdown("**Renovación automática**")
         with col_btn_auto:
@@ -3747,7 +3978,6 @@ def render_salud_ciclo_vida(cfg):
 
 # --- Configuración de la vista Cartera (fuente: resultado_todos_status) ---
 CARTERA_CONFIG = {
-    "subheader": "Salud de cartera y ciclo de vida de clientes",
     "caption": (
         "Esta sección siempre incluye todos los status (Activo, Inactivo, Cancelado, Pre Activo), "
         "sin importar el filtro de status de la barra lateral."
@@ -3856,9 +4086,9 @@ GARANTIAS_CONFIG = {
 if seccion == "Mapa":
     mostrar_intro_globo(VISTA_CENTRO[0], VISTA_CENTRO[1], zoom_destino=6.0)
 
-    col_head_title, col_head_actions = st.columns([0.78, 0.22])
-    with col_head_title:
-        st.subheader("Mapa de zonas de Gas Natural")
+    col_head_texto, col_head_actions = st.columns([0.78, 0.22], vertical_alignment="center")
+    with col_head_texto:
+        ph_texto_mapa = st.empty()
 
     df_geo_seccion = df_geo_pre_zona
 
@@ -3898,15 +4128,11 @@ if seccion == "Mapa":
 
                 col_accion_1, col_accion_2 = st.columns(2)
                 with col_accion_1:
-                    if st.button("Seleccionar todo", key="kml_todo", use_container_width=True):
-                        for capa in capas:
-                            st.session_state[f"kml_{capa}"] = True
-                        st.rerun()
+                    st.button("Seleccionar todo", key="kml_todo", use_container_width=True,
+                              on_click=_fijar_capas_kml, args=(capas, True))
                 with col_accion_2:
-                    if st.button("Deseleccionar todo", key="kml_nada", use_container_width=True):
-                        for capa in capas:
-                            st.session_state[f"kml_{capa}"] = False
-                        st.rerun()
+                    st.button("Deseleccionar todo", key="kml_nada", use_container_width=True,
+                              on_click=_fijar_capas_kml, args=(capas, False))
 
                 if capas:
                     num_cols_capas = 4 if len(capas) >= 8 else (3 if len(capas) >= 5 else 2)
@@ -4001,10 +4227,10 @@ if seccion == "Mapa":
             st.info("Ningún cliente coincide con el filtro de Id de Instalación en esta sección.")
         else:
             if zona_sel == "Vista general":
-                st.caption("Selecciona una zona en el menú o haz clic sobre una geometría del mapa.")
+                ph_texto_mapa.caption("Selecciona una zona en el menú o haz clic sobre una geometría del mapa.")
             else:
                 n_z = int((df_geo_mapa['zona'] == zona_sel).sum())
-                st.caption(f"Mostrando {n_z} clientes en {zona_sel}. Clic en otra zona para cambiar.")
+                ph_texto_mapa.caption(f"Mostrando {n_z} clientes en {zona_sel}. Clic en otra zona para cambiar.")
 
             # Nota: no se cachea el objeto folium.Map en session_state.
             # Reutilizar la misma instancia entre reruns puede dejar el
@@ -4015,51 +4241,14 @@ if seccion == "Mapa":
                            # cp_marker=cp_marker_data  # buscador por CP desactivado
                            )
 
-            map_data = st_folium(
+            # El clic en el mapa (🏠 o zona) se procesa al inicio de la ejecución, sin rerun.
+            st_folium(
                 m,
                 use_container_width=True,
                 height=600,
                 key="mapa_zonas",
                 returned_objects=["last_object_clicked", "last_clicked"],
             )
-
-            # st_folium conserva el último clic entre reruns, por eso guardamos
-            # una "firma" de lo ya procesado y solo actuamos ante un clic nuevo.
-            click_obj = (map_data or {}).get("last_object_clicked") or {}
-            click_map = (map_data or {}).get("last_clicked") or {}
-
-            def _firma(p):
-                if p.get("lat") is None or p.get("lng") is None:
-                    return None
-                return (round(p["lat"], 6), round(p["lng"], 6))
-
-            def _es_centinela(sig):
-                # El botón 🏠 emite un clic cerca de (0,0).
-                return sig is not None and abs(sig[0]) < 0.001 and abs(sig[1]) < 0.01
-
-            sig_obj = _firma(click_obj)
-            sig_map = _firma(click_map)
-
-            # 1) Botón "home" (🏠): clic centinela en last_clicked -> Vista general.
-            if _es_centinela(sig_map) and sig_map != st.session_state.get("sig_home_proc"):
-                st.session_state.sig_home_proc = sig_map
-                if st.session_state.zona_widget != "Vista general":
-                    st.session_state.pending_zona = "Vista general"
-                    st.rerun()
-
-            # 2) Selección de zona por clic sobre una geometría del mapa.
-            sig_zona, click_zona = None, None
-            if sig_obj is not None and not _es_centinela(sig_obj):
-                sig_zona, click_zona = sig_obj, click_obj
-            elif sig_map is not None and not _es_centinela(sig_map):
-                sig_zona, click_zona = sig_map, click_map
-
-            if sig_zona is not None and sig_zona != st.session_state.get("sig_zona_proc"):
-                st.session_state.sig_zona_proc = sig_zona
-                nueva_zona = zona_de_click(click_zona["lng"], click_zona["lat"])
-                if nueva_zona and nueva_zona != st.session_state.zona_widget:
-                    st.session_state.pending_zona = nueva_zona
-                    st.rerun()
 
             leyenda = " &nbsp; ".join(
                 f'<span style="color:{ZONA_COLORS[z]}">&#9679;</span> {z}'
@@ -4134,7 +4323,6 @@ elif seccion == "Reportes":
             base_reporte = base_reporte.merge(consumo_rep, on='id_instalacion', how='inner')
 
     if base_reporte.empty:
-        st.subheader("📄 Generador de reportes personalizados")
         st.info("No hay datos disponibles para generar un reporte.")
     else:
         # --- 1) Selección de columnas ---
@@ -4253,9 +4441,15 @@ elif seccion == "Reportes":
             df_reporte_final = df_reporte[columnas_orden].copy()
             df_reporte_final = df_reporte_final.rename(columns=generar_renombres_reporte(df_reporte_final.columns))
 
-        col_titulo, col_acciones = st.columns([4, 2])
-        with col_titulo:
-            st.subheader("📄 Generador de reportes personalizados")
+        col_periodicidad, col_acciones = st.columns([4, 2], vertical_alignment="center")
+        with col_periodicidad:
+            st.segmented_control(
+                "Periodicidad",
+                options=["Mensual", "Diario"],
+                key="reporte_periodicidad",
+                default="Mensual",
+                label_visibility="collapsed",
+            )
         with col_acciones:
             col_btn_manage, col_btn_export = st.columns(2)
             with col_btn_manage:
@@ -4286,14 +4480,6 @@ elif seccion == "Reportes":
                         st.session_state["mostrar_manage_columns"] = False
                 else:
                     st.button("Export", key="btn_export_disabled_header", disabled=True, use_container_width=True)
-
-            st.segmented_control(
-                "Periodicidad",
-                options=["Mensual", "Diario"],
-                key="reporte_periodicidad",
-                default="Mensual",
-                label_visibility="collapsed",
-            )
 
             if st.session_state.get("mostrar_manage_columns"):
                 _dialog_manage_columns(columnas_disponibles, columnas_default, columnas_state_key)
@@ -4340,7 +4526,7 @@ elif seccion == "Reportes":
                 column_config=column_config_reporte,
             )
 
-            st.markdown("**Resumen por zona**")
+            st.subheader("Resumen por zona")
             col_resumen_consumo = col_consumo_base
             if 'zona_vpm' not in df_reporte.columns or col_resumen_consumo not in df_reporte.columns:
                 st.info("No hay datos suficientes para construir el resumen por zona.")
@@ -4536,7 +4722,9 @@ elif seccion == "Dashboard":
 
 
         for subtab, col in zip(subtabs, cols_consumo):
-            with subtab:
+            # Fragmento: cambiar el Top N solo rerunea este bloque (col se liga por default arg).
+            @st.fragment
+            def _fragmento_top_n(col=col):
                 # Fila de control: slider y descarga alineados
                 control_col, _ = st.columns([5, 1.4])
                 
@@ -4767,12 +4955,30 @@ elif seccion == "Dashboard":
                             + ", ".join(f"{c} ({n})" for c, n in clientes_repetidos.items())
                         )
 
+                    top_excel = _excel_bytes_desde_hojas({"Top N": top_fmt})
+                    col_titulo_top, col_export_top = st.columns([0.86, 0.14])
+                    with col_titulo_top:
+                        st.markdown("**Detalle Top N**")
+                    with col_export_top:
+                        st.download_button(
+                            label="Export",
+                            data=top_excel,
+                            file_name=f"top_n_consumidores_{col}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_top_n_consumidores_{col}",
+                        )
+
                     st.dataframe(
                         top_fmt.style.format({'Consumo (GJ)': '{:,.0f}'}),
                         use_container_width=True,
                         hide_index=True,
                     )
 
+                return not top.empty
+
+            with subtab:
+                hay_top = _fragmento_top_n()
+                if hay_top:
                     # ============================================================
                     # ANALISIS (KPIs + evolucion + zonas)
                     # ============================================================
@@ -4919,111 +5125,65 @@ elif seccion == "Dashboard":
                         _dashboard_echarts(option_evol, 360, key=f"evol_{col}")
 
                     st.write("")
-                    col_donut, col_barras = st.columns(2)
+                    vol_zona = (
+                        df_geo_todas_zonas.groupby('zona')['Consumo_Total_Periodo_GJ']
+                        .apply(lambda s: pd.to_numeric(s, errors='coerce').fillna(0).sum())
+                        .sort_values(ascending=False)
+                    )
+                    vol_zona = vol_zona[vol_zona > 0]
+                    clientes_zona = df_geo_todas_zonas.groupby('zona').size()
+                    st.markdown("**Participación de volumen por zona**")
+                    _bloque_donut_zona(col, vol_zona, clientes_zona)
 
-                    with col_donut:
-                        st.markdown("**Participación de volumen por zona**")
-                        vol_zona = (
-                            df_geo_todas_zonas.groupby('zona')['Consumo_Total_Periodo_GJ']
-                            .apply(lambda s: pd.to_numeric(s, errors='coerce').fillna(0).sum())
-                            .sort_values(ascending=False)
-                        )
-                        vol_zona = vol_zona[vol_zona > 0]
-                        if vol_zona.empty:
-                            st.info("Sin volumen por zona.")
-                        else:
-                            total_zona = float(vol_zona.sum())
-                            DONUT_CX, DONUT_CY = 230, 198
-                            DONUT_R_IN, DONUT_R_OUT = 72, 162
-                            # Color de respaldo distinto para zonas sin color definido (ej. Mayakan),
-                            # para que no se confunda con el azul de Zona 8.
-                            colores_donut_extra = {"Zona Mayakan": "#00897B"}
-                            data_donut = []
-                            for z, v in vol_zona.items():
-                                color_z = ZONA_COLORS.get(z, colores_donut_extra.get(z, "#0077CC"))
-                                item = {
-                                    "name": z,
-                                    "value": float(v),
-                                    "itemStyle": {"color": _degradado_radial_donut(
-                                        color_z, DONUT_CX, DONUT_CY, DONUT_R_OUT, DONUT_R_IN,
-                                        oscuro=-0.30, claro=0.40,
-                                    )},
-                                }
-                                if v / total_zona < 0.05:
-                                    item["label"] = {"position": "outside", "color": "#333333"}
-                                    item["labelLine"] = {"show": True, "length": 8, "length2": 6}
-                                data_donut.append(item)
-
-                            option_donut = {
-                                "tooltip": {
-                                    **DASHBOARD_TOOLTIP,
-                                    "trigger": "item",
-                                    "formatter": JsCode("function (p) { return '<b>' + p.name + '</b><br>' + Number(p.value).toLocaleString('en-US', {maximumFractionDigits: 0}) + ' GJ<br>' + Number(p.percent).toFixed(2) + '%'; }"),
-                                },
-                                "legend": {"orient": "vertical", "right": 10, "top": "middle", "selectedMode": False, "textStyle": {"color": "#1F2937"}},
-                                "series": [{
-                                    "type": "pie",
-                                    "radius": [DONUT_R_IN, DONUT_R_OUT],
-                                    "center": [DONUT_CX, DONUT_CY],
-                                    "padAngle": 2.3,
-                                    "minAngle": 5,
-                                    "percentPrecision": 1,
-                                    "selectedMode": "single",
-                                    "itemStyle": {"borderRadius": 10, "shadowBlur": 20, "shadowColor": "rgba(0,0,0,0.15)", "shadowOffsetY": 6},
-                                    "label": {"show": True, "position": "inside", "formatter": "{d}%", "fontWeight": "bold", "fontSize": 18, "color": "#1F2937"},
-                                    "labelLine": {"show": False},
-                                    "emphasis": {"scale": True, "scaleSize": 6},
-                                    "data": data_donut,
-                                }],
-                            }
-                            _dashboard_echarts(option_donut, 380, key=f"donut_{col}")
-
-                    with col_barras:
-                        st.markdown("**Clientes por zona**")
-                        mes_col = col if col in df_geo_todas_zonas.columns else 'Consumo_Total_Periodo_GJ'
-                        cli_zona = (
-                            df_geo_todas_zonas[pd.to_numeric(df_geo_todas_zonas[mes_col], errors='coerce').fillna(0) > 0]
-                            .groupby('zona').size()
-                            .sort_values(ascending=True)
-                        )
-                        cli_zona = cli_zona[cli_zona > 0]
-                        if cli_zona.empty:
-                            st.info("Sin clientes por zona.")
-                        else:
-                            option_cli = {
-                                "tooltip": {
-                                    **DASHBOARD_TOOLTIP,
-                                    "trigger": "item",
-                                    "formatter": JsCode("function (p) { return '<b>' + p.name + '</b><br>' + Number(p.value).toLocaleString('en-US') + ' clientes'; }"),
-                                },
-                                "grid": {"left": 10, "right": 40, "top": 56, "bottom": 48, "containLabel": True},
-                                "xAxis": {
-                                    "type": "value",
-                                    "name": "Clientes",
-                                    "nameLocation": "middle",
-                                    "nameGap": 30,
-                                    "axisLine": {"show": False},
-                                    "axisTick": {"show": False},
-                                    "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
-                                },
-                                "yAxis": {
-                                    "type": "category",
-                                    "data": cli_zona.index.tolist(),
-                                    "axisLine": {"show": False},
-                                    "axisTick": {"show": False},
-                                    "axisLabel": {"fontSize": 11},
-                                },
-                                "series": [{
-                                    "type": "bar",
-                                    "data": [int(v) for v in cli_zona.values],
-                                    "itemStyle": {"color": "#007BC5"},
-                                    "label": {"show": True, "position": "right", "fontSize": 11, "color": "#1F2937"},
-                                }],
-                            }
-                            _dashboard_echarts(option_cli, 380, key=f"barzona_{col}")
+                    # Grafica "Clientes por zona" desactivada; para restaurarla quitar los "# " de este bloque.
+                    # with col_barras:
+                    #     st.markdown("**Clientes por zona**")
+                    #     mes_col = col if col in df_geo_todas_zonas.columns else 'Consumo_Total_Periodo_GJ'
+                    #     cli_zona = (
+                    #         df_geo_todas_zonas[pd.to_numeric(df_geo_todas_zonas[mes_col], errors='coerce').fillna(0) > 0]
+                    #         .groupby('zona').size()
+                    #         .sort_values(ascending=True)
+                    #     )
+                    #     cli_zona = cli_zona[cli_zona > 0]
+                    #     if cli_zona.empty:
+                    #         st.info("Sin clientes por zona.")
+                    #     else:
+                    #         option_cli = {
+                    #             "tooltip": {
+                    #                 **DASHBOARD_TOOLTIP,
+                    #                 "trigger": "item",
+                    #                 "formatter": JsCode("function (p) { return '<b>' + p.name + '</b><br>' + Number(p.value).toLocaleString('en-US') + ' clientes'; }"),
+                    #             },
+                    #             "grid": {"left": 10, "right": 40, "top": 56, "bottom": 48, "containLabel": True},
+                    #             "xAxis": {
+                    #                 "type": "value",
+                    #                 "name": "Clientes",
+                    #                 "nameLocation": "middle",
+                    #                 "nameGap": 30,
+                    #                 "axisLine": {"show": False},
+                    #                 "axisTick": {"show": False},
+                    #                 "splitLine": {"show": True, "lineStyle": {"color": "#EEF2F7"}},
+                    #             },
+                    #             "yAxis": {
+                    #                 "type": "category",
+                    #                 "data": cli_zona.index.tolist(),
+                    #                 "axisLine": {"show": False},
+                    #                 "axisTick": {"show": False},
+                    #                 "axisLabel": {"fontSize": 11},
+                    #             },
+                    #             "series": [{
+                    #                 "type": "bar",
+                    #                 "data": [int(v) for v in cli_zona.values],
+                    #                 "itemStyle": {"color": "#007BC5"},
+                    #                 "label": {"show": True, "position": "right", "fontSize": 11, "color": "#1F2937"},
+                    #             }],
+                    #         }
+                    #         _dashboard_echarts(option_cli, 380, key=f"barzona_{col}")
 
                     st.markdown("---")
 
+                @st.fragment
+                def _fragmento_tendencia(col=col):
                     # ----- Tendencia diaria de consumo (detalle dia a dia) -----
                     base_tendencia = base_top.rename(
                         columns={'tipo_de_cliente': 'Segmentación'}
@@ -5035,14 +5195,17 @@ elif seccion == "Dashboard":
                         )
                         if 'Segmentación' in base_tendencia.columns else []
                     )
-                    key_segmentacion = f"segmentacion_tendencia_{col}"
-                    if key_segmentacion not in st.session_state:
-                        st.session_state[key_segmentacion] = list(opciones_segmentacion)
-                    else:
-                        st.session_state[key_segmentacion] = [
-                            valor for valor in st.session_state[key_segmentacion]
-                            if valor in opciones_segmentacion
-                        ]
+                    keys_segmentacion = {
+                        valor: f"segmentacion_tendencia_{col}_opcion_{valor}"
+                        for valor in opciones_segmentacion
+                    }
+                    for key_opcion in keys_segmentacion.values():
+                        if key_opcion not in st.session_state:
+                            st.session_state[key_opcion] = True
+                    segmentaciones_sel = [
+                        valor for valor, key_opcion in keys_segmentacion.items()
+                        if st.session_state[key_opcion]
+                    ]
 
                     mask_fecha = pd.Series(True, index=consumo_diario.index)
                     if col == 'Consumo_Total_Periodo_GJ':
@@ -5067,40 +5230,33 @@ elif seccion == "Dashboard":
 
                     columnas_tendencia = st.columns([5, 1])
                     with columnas_tendencia[0]:
-                        st.markdown("**📈 Tendencia diaria de consumo**")
-                    seleccion_count = len(st.session_state[key_segmentacion])
+                        st.subheader("📈 Tendencia diaria de consumo")
                     with columnas_tendencia[1]:
                         with st.popover(
-                            f"Segmentación ({seleccion_count}/{len(opciones_segmentacion)})",
+                            f"Segmentación ({len(segmentaciones_sel)}/{len(opciones_segmentacion)})",
                             disabled=not opciones_segmentacion,
                         ):
                             botones_segmentacion = st.columns(2)
                             with botones_segmentacion[0]:
-                                if st.button(
+                                st.button(
                                     "Seleccionar todo",
                                     key=f"segmentacion_todo_{col}",
                                     disabled=not opciones_segmentacion,
                                     use_container_width=True,
-                                ):
-                                    for valor in opciones_segmentacion:
-                                        st.session_state[f"{key_segmentacion}_opcion_{valor}"] = True
+                                    on_click=_fijar_checkboxes_segmentacion,
+                                    args=(list(keys_segmentacion.values()), True),
+                                )
                             with botones_segmentacion[1]:
-                                if st.button(
+                                st.button(
                                     "Limpiar selección",
                                     key=f"segmentacion_limpiar_{col}",
                                     disabled=not opciones_segmentacion,
                                     use_container_width=True,
-                                ):
-                                    for valor in opciones_segmentacion:
-                                        st.session_state[f"{key_segmentacion}_opcion_{valor}"] = False
-                            segmentaciones_sel = []
-                            for valor in opciones_segmentacion:
-                                key_opcion = f"{key_segmentacion}_opcion_{valor}"
-                                if key_opcion not in st.session_state:
-                                    st.session_state[key_opcion] = valor in st.session_state[key_segmentacion]
-                                if st.checkbox(valor, key=key_opcion):
-                                    segmentaciones_sel.append(valor)
-                            st.session_state[key_segmentacion] = segmentaciones_sel
+                                    on_click=_fijar_checkboxes_segmentacion,
+                                    args=(list(keys_segmentacion.values()), False),
+                                )
+                            for valor, key_opcion in keys_segmentacion.items():
+                                st.checkbox(valor, key=key_opcion)
 
                     if not segmentaciones_sel:
                         st.info("Selecciona al menos una segmentación")
@@ -5253,6 +5409,9 @@ elif seccion == "Dashboard":
                                     key=f"dl_tendencia_lideres_{col}",
                                     use_container_width=False,
                                 )
+
+                if hay_top:
+                    _fragmento_tendencia()
     elif cols_consumo and df_geo.empty:
         st.info("No hay coordenadas para calcular el Top 10 por zona.")
     elif cols_consumo:
@@ -5269,18 +5428,22 @@ elif seccion == "Gestión Comercial":
     # elegido se persiste en st.session_state["vista_cartera_garantias"] y
     # determina qué configuración (dataset + etiquetas) se le pasa a la
     # función reutilizable render_salud_ciclo_vida (layout/lógica idénticos).
-    col_espacio, col_selector = st.columns([4.9, 1.1])
-    with col_selector:
-        vista_cartera_garantias = st.segmented_control(
-            "Vista",
-            options=["Clientes", "Garantías"],
-            default="Clientes",
-            key="vista_cartera_garantias",
-            label_visibility="collapsed",
-        )
+    @st.fragment
+    def _vista_gestion_comercial():
+        col_espacio, col_selector = st.columns([4.9, 1.1])
+        with col_selector:
+            vista_cartera_garantias = st.segmented_control(
+                "Vista",
+                options=["Clientes", "Garantías"],
+                default="Clientes",
+                key="vista_cartera_garantias",
+                label_visibility="collapsed",
+            )
 
-    cfg_activa = GARANTIAS_CONFIG if vista_cartera_garantias == "Garantías" else CARTERA_CONFIG
-    render_salud_ciclo_vida(cfg_activa)
+        cfg_activa = GARANTIAS_CONFIG if vista_cartera_garantias == "Garantías" else CARTERA_CONFIG
+        render_salud_ciclo_vida(cfg_activa)
+
+    _vista_gestion_comercial()
 
 # Se ejecuta al final para resetear el scroll después de renderizar la nueva sección.
 if _should_scroll_top:
