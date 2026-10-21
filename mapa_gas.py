@@ -1141,6 +1141,9 @@ RENOMBRES_REPORTE = {
     'Consumo_Total_Periodo_GJ': 'Consumo Periodo (GJ)',
     'fecha_consumo': 'Fecha Consumo',
     'consumo_gj_diario': 'Consumo Diario (GJ)',
+    'consumo_gj_mensual': 'Consumo Mensual (GJ)',
+    'promedio_gj_mensual': 'Promedio Mensual (GJ)',
+    'mes_consumo': 'Mes',
     'fecha_vigencia_actualizada': 'Fecha Vigencia',
     'renovacion': 'Tipo Renovación',
     'ldc': 'LDC',
@@ -1295,16 +1298,13 @@ def _dialog_manage_columns(columnas_disponibles, columnas_default, columnas_stat
                 st.session_state.pop(f"gestion_col_chk_{c}", None)
             st.session_state[columnas_state_key] = list(columnas_default)
             st.session_state["gestion_columnas_draft"] = list(columnas_default)
-            st.session_state["mostrar_manage_columns"] = False
             st.rerun()
     with b_cancel:
         if st.button("Cancel", use_container_width=True, key="gestion_cols_cancel"):
-            st.session_state["mostrar_manage_columns"] = False
             st.rerun()
     with b_save:
         if st.button("Save", type="primary", use_container_width=True, key="gestion_cols_save"):
             st.session_state[columnas_state_key] = list(draft)
-            st.session_state["mostrar_manage_columns"] = False
             st.rerun()
 
 
@@ -4315,9 +4315,9 @@ elif seccion == "Reportes":
             base_reporte = base_reporte[zonas_reporte_norm == zona_sel_global_norm].copy()
 
     # Periodicidad del reporte personalizado:
-    # - Mensual: conserva el dataset actual (una fila por cliente)
+    # - Mensual: expande a detalle por cliente-mes con consumo_gj_mensual
     # - Diario: expande a detalle por cliente-fecha con consumo_gj_diario
-    if periodicidad_reporte == "Diario":
+    if periodicidad_reporte in ("Mensual", "Diario"):
         if consumo_diario.empty:
             base_reporte = base_reporte.iloc[0:0].copy()
         else:
@@ -4328,10 +4328,28 @@ elif seccion == "Reportes":
                     & (consumo_rep['fecha'].dt.date <= fecha_fin)
                 )
                 consumo_rep = consumo_rep[mascara_periodo].copy()
-            consumo_rep = consumo_rep.rename(columns={
-                'fecha': 'fecha_consumo',
-                'consumo_gj': 'consumo_gj_diario',
-            })
+            if periodicidad_reporte == "Mensual":
+                consumo_rep['mes_consumo'] = consumo_rep['fecha'].dt.to_period('M').dt.to_timestamp()
+                consumo_rep = (
+                    consumo_rep.groupby(['id_instalacion', 'mes_consumo'], as_index=False)['consumo_gj'].sum()
+                    .rename(columns={'consumo_gj': 'consumo_gj_mensual'})
+                )
+                # Días de cada mes que caen dentro del Periodo de consumo seleccionado.
+                inicio_mes = consumo_rep['mes_consumo']
+                fin_mes = inicio_mes + pd.offsets.MonthEnd(0)
+                if fecha_ini and fecha_fin:
+                    inicio_mes = inicio_mes.clip(lower=pd.Timestamp(fecha_ini))
+                    fin_mes = fin_mes.clip(upper=pd.Timestamp(fecha_fin))
+                dias_mes = (fin_mes - inicio_mes).dt.days + 1
+                consumo_rep['promedio_gj_mensual'] = np.where(
+                    dias_mes > 0, consumo_rep['consumo_gj_mensual'] / dias_mes, 0.0
+                )
+            else:
+                consumo_rep = consumo_rep.rename(columns={
+                    'fecha': 'fecha_consumo',
+                    'consumo_gj': 'consumo_gj_diario',
+                })
+                consumo_rep['promedio_gj_mensual'] = consumo_rep['consumo_gj_diario']
             base_reporte = base_reporte.merge(consumo_rep, on='id_instalacion', how='inner')
 
     if base_reporte.empty:
@@ -4368,8 +4386,8 @@ elif seccion == "Reportes":
         if periodicidad_reporte == "Diario":
             columnas_default = [
                 c for c in [
-                    'id_instalacion', 'bp', 'tipo_de_cliente', 'fecha_consumo',
-                    'consumo_gj_diario', 'fecha_vigencia_actualizada', 'renovacion',
+                    'fecha_consumo', 'id_instalacion', 'bp', 
+                    'consumo_gj_diario', 'promedio_gj_mensual', 'fecha_vigencia_actualizada', 'tipo_de_cliente', 'renovacion',
                     'ldc', 'zona_vpm', 'indice_referencia',
                     'spread_firme', 'spread_volumetrico_o_interrumpible',
                     'pct_cliente_zona', 'spread_ponderado'
@@ -4379,8 +4397,8 @@ elif seccion == "Reportes":
         else:
             columnas_default = [
                 c for c in [
-                    'id_instalacion', 'bp', 'tipo_de_cliente', 'Consumo_Total_Periodo_GJ',
-                    'fecha_vigencia_actualizada', 'renovacion', 'ldc', 'zona_vpm',
+                    'mes_consumo', 'id_instalacion', 'bp', 'consumo_gj_mensual', 'promedio_gj_mensual',
+                    'fecha_vigencia_actualizada', 'tipo_de_cliente', 'renovacion', 'ldc', 'zona_vpm',
                     'indice_referencia', 'spread_firme',
                     'spread_volumetrico_o_interrumpible', 'pct_cliente_zona', 'spread_ponderado'
                 ]
@@ -4388,6 +4406,14 @@ elif seccion == "Reportes":
             ]
 
         columnas_state_key = f"reporte_columnas_orden_{periodicidad_reporte.lower()}"
+
+        # Actualiza el orden anterior por defecto sin alterar selecciones personalizadas.
+        columnas_default_anterior = list(columnas_default)
+        if 'tipo_de_cliente' in columnas_default_anterior:
+            columnas_default_anterior.remove('tipo_de_cliente')
+            columnas_default_anterior.insert(2, 'tipo_de_cliente')
+        if st.session_state.get(columnas_state_key) == columnas_default_anterior:
+            st.session_state[columnas_state_key] = list(columnas_default)
 
         # El orden y la selección de columnas se gestionan desde el modal
         # "Manage Columns" (ver `_dialog_manage_columns`) y se persisten aquí.
@@ -4401,9 +4427,6 @@ elif seccion == "Reportes":
         columnas_orden = st.session_state[columnas_state_key]
 
         # El filtro por fecha se deshabilita en la pestaña de reportes.
-        if "mostrar_manage_columns" not in st.session_state:
-            st.session_state["mostrar_manage_columns"] = False
-
         col_fecha_sel = "(sin filtro)"
         fecha_ini_rep = fecha_fin_rep = None
         f_min = f_max = None
@@ -4415,7 +4438,8 @@ elif seccion == "Reportes":
         # % cliente por Zona = Consumo_Total_Periodo_GJ del cliente / suma de
         # Consumo_Total_Periodo_GJ de su zona (zona_vpm), sobre los datos ya
         # filtrados por fecha/zona. Expresado en escala 0-100.
-        col_consumo_base = 'consumo_gj_diario' if periodicidad_reporte == "Diario" and 'consumo_gj_diario' in df_reporte.columns else 'Consumo_Total_Periodo_GJ'
+        col_consumo_fila = {'Diario': 'consumo_gj_diario', 'Mensual': 'consumo_gj_mensual'}.get(periodicidad_reporte)
+        col_consumo_base = col_consumo_fila if col_consumo_fila in df_reporte.columns else 'Consumo_Total_Periodo_GJ'
 
         if 'zona_vpm' in df_reporte.columns and col_consumo_base in df_reporte.columns:
             consumo_num = pd.to_numeric(df_reporte[col_consumo_base], errors='coerce').fillna(0)
@@ -4465,11 +4489,13 @@ elif seccion == "Reportes":
         with col_acciones:
             col_btn_manage, col_btn_export = st.columns(2)
             with col_btn_manage:
-                if st.button("🛠️ Manage Columns", key="btn_manage_columns", use_container_width=True):
+                abrir_manage_columns = st.button(
+                    "🛠️ Manage Columns", key="btn_manage_columns", use_container_width=True
+                )
+                if abrir_manage_columns:
                     for c in columnas_disponibles:
                         st.session_state.pop(f"gestion_col_chk_{c}", None)
                     st.session_state["gestion_columnas_draft"] = list(columnas_orden)
-                    st.session_state["mostrar_manage_columns"] = True
             with col_btn_export:
                 if df_reporte_final is not None:
                     buffer_export = BytesIO()
@@ -4480,7 +4506,7 @@ elif seccion == "Reportes":
                         datetime_format='dd/mm/yyyy',
                     ) as writer:
                         df_reporte_final.to_excel(writer, index=False, sheet_name='Reporte')
-                    export_clicked = st.download_button(
+                    st.download_button(
                         "Export",
                         buffer_export.getvalue(),
                         "reporte_personalizado.xlsx",
@@ -4488,12 +4514,10 @@ elif seccion == "Reportes":
                         key="dl_excel_reporte_header",
                         use_container_width=True,
                     )
-                    if export_clicked:
-                        st.session_state["mostrar_manage_columns"] = False
                 else:
                     st.button("Export", key="btn_export_disabled_header", disabled=True, use_container_width=True)
 
-            if st.session_state.get("mostrar_manage_columns"):
+            if abrir_manage_columns:
                 _dialog_manage_columns(columnas_disponibles, columnas_default, columnas_state_key)
 
         texto_registros = f"Registros: {len(df_reporte_final)}" if df_reporte_final is not None else ""
@@ -4520,6 +4544,21 @@ elif seccion == "Reportes":
             if nombre_consumo_diario in df_reporte_final.columns:
                 column_config_reporte[nombre_consumo_diario] = st.column_config.NumberColumn(
                     nombre_consumo_diario, format='%,.4f GJ'
+                )
+            nombre_consumo_mensual = renombres_aplicados.get('consumo_gj_mensual')
+            if nombre_consumo_mensual in df_reporte_final.columns:
+                column_config_reporte[nombre_consumo_mensual] = st.column_config.NumberColumn(
+                    nombre_consumo_mensual, format='%,.4f'
+                )
+            nombre_promedio_mensual = renombres_aplicados.get('promedio_gj_mensual')
+            if nombre_promedio_mensual in df_reporte_final.columns:
+                column_config_reporte[nombre_promedio_mensual] = st.column_config.NumberColumn(
+                    nombre_promedio_mensual, format='%,.4f'
+                )
+            nombre_mes = renombres_aplicados.get('mes_consumo')
+            if nombre_mes in df_reporte_final.columns:
+                column_config_reporte[nombre_mes] = st.column_config.DateColumn(
+                    nombre_mes, format="MM/YYYY"
                 )
             nombre_pct_zona = renombres_aplicados.get('pct_cliente_zona')
             if nombre_pct_zona in df_reporte_final.columns:
