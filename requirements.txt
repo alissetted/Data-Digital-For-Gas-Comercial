@@ -4,7 +4,7 @@ streamlit-sortables==0.3.1
 streamlit-echarts==0.7.0
 pandas==3.0.3
 numpy==2.5.1
-pyodbc==5.3.0
+databricks-sql-connector==4.7.0
 pgeocode==0.5.0
 folium==0.20.0
 branca==0.8.2

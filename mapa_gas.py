@@ -1,7 +1,10 @@
 ﻿import streamlit as st
 import pandas as pd
 import numpy as np
-import pyodbc
+from databricks import sql
+from collections.abc import Mapping
+from pathlib import Path
+import tomllib
 import pgeocode
 import folium
 import time
@@ -35,6 +38,23 @@ st.markdown("""
     section[data-testid="stSidebar"] {
         background: linear-gradient(180deg, #002B49 0%, #007BC5 100%);
         min-width: 260px;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type,
+    section[data-testid="stSidebar"] .st-key-gj_filter_type [data-testid="stPills"],
+    section[data-testid="stSidebar"] .st-key-gj_filter_type [role="group"] {
+        width: 100% !important;
+        max-width: none !important;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type [data-testid="stPills"] > div,
+    section[data-testid="stSidebar"] .st-key-gj_filter_type [role="group"] {
+        display: flex !important;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type button,
+    section[data-testid="stSidebar"] .st-key-gj_filter_type [role="radio"] {
+        flex: 1 1 0 !important;
+        min-width: 0;
+        justify-content: center;
+        font-size: 0.78rem !important;
     }
     section[data-testid="stSidebar"] * {
         color: white !important;
@@ -273,7 +293,7 @@ st.markdown("""
         background: #FFFFFF !important;
     }
     section[data-testid="stSidebar"] .st-key-gj_filter_type button[data-variant="pills"] {
-        font-size: 0.85rem !important;
+        font-size: 0.72rem !important;
         font-weight: 700 !important;
         padding: 0.6rem 0.8rem !important;
         min-height: 36px !important;
@@ -285,6 +305,9 @@ st.markdown("""
         margin: 0 !important;
         box-shadow: none !important;
         text-align: center !important;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type button[data-variant="pills"] * {
+        font-size: inherit !important;
     }
     section[data-testid="stSidebar"] .st-key-gj_filter_type button[data-variant="pills"]:is([aria-checked="true"], [aria-pressed="true"]) {
         background: linear-gradient(135deg, #0077CC 0%, #003C88 100%) !important;
@@ -1383,7 +1406,7 @@ _STATUS_MAPA = {
 }
 
 # Normalización de status_garantia (pestaña Garantías). A diferencia del status
-# de clientes (4 categorías + 'Sin status'), bv_hop_garantia solo trae 3 valores
+# de clientes (4 categorías + 'Sin status'), denodo_garantia solo trae 3 valores
 # reales (Vigente/Liberado/Vencido); no existe un equivalente de 'Pre Activo'.
 _STATUS_GARANTIA_MAPA = {
     "vigente": "Vigente",
@@ -1429,6 +1452,17 @@ def fecha_baja_es_valida_serie(serie_fecha):
     """Version vectorizada de `fecha_baja_es_valida` para una Series de
     datetimes ya parseados (pd.to_datetime), sin apply fila a fila."""
     return serie_fecha.notna() & (serie_fecha.dt.year != 9999)
+
+
+def _calcular_dias_restantes(serie_fecha, hoy=None):
+    """Resta fechas de vigencia alineando la zona horaria de la fecha actual."""
+    hoy = pd.Timestamp(datetime.now().date() if hoy is None else hoy)
+    zona_horaria = serie_fecha.dt.tz
+    if zona_horaria is not None and hoy.tzinfo is None:
+        hoy = hoy.tz_localize(zona_horaria)
+    elif zona_horaria is None and hoy.tzinfo is not None:
+        hoy = hoy.tz_localize(None)
+    return (serie_fecha - hoy).dt.days
 
 
 def month_to_spanish_label(year_month):
@@ -1818,27 +1852,50 @@ def _dibujar_kml(parent, datos_kml, carpetas_visibles):
         fg.add_to(parent)
 
 
-# --- Conexión a la base de datos (pyodbc) ---
+# --- Conexión al SQL Warehouse de Databricks ---
 def get_connection():
-    cfg = st.secrets["denodo"]
-    conn_str = (
-        f"DSN={cfg['DSN']};"
-        f"SERVER={cfg['SERVER']};"
-        f"DATABASE={cfg['DATABASE']};"
-        f"UID={cfg['UID']};"
-        f"PWD={cfg['PWD']};"
-        "trusted_connection=yes;"
-        "TrustServerCertificate=Yes"
+    """Lee [databricks] del TOML local (Python 3.11+) o de st.secrets.
+
+    .streamlit/secretsdatabricks.toml, junto a este script, debe contener
+    server_hostname, http_path y access_token. Si el archivo no existe,
+    se usa [databricks] de los secretos de Streamlit para despliegues.
+    """
+    secrets_path = Path(__file__).resolve().parent / ".streamlit" / "secretsdatabricks.toml"
+    if secrets_path.is_file():
+        with secrets_path.open("rb") as secrets_file:
+            secrets = tomllib.load(secrets_file)
+    else:
+        secrets = st.secrets
+
+    if "databricks" not in secrets:
+        raise ValueError("Falta la sección [databricks] en la configuración de secretos.")
+    cfg = secrets["databricks"]
+    if not isinstance(cfg, Mapping):
+        raise ValueError("La sección [databricks] debe contener los campos de conexión.")
+    required_fields = ("server_hostname", "http_path", "access_token")
+    missing_fields = [
+        field for field in required_fields
+        if not isinstance(cfg.get(field), str) or not cfg[field].strip()
+    ]
+    if missing_fields:
+        raise ValueError(
+            "Configuración de Databricks incompleta. Revisa: " + ", ".join(missing_fields)
+        )
+    return sql.connect(
+        server_hostname=cfg["server_hostname"].strip(),
+        http_path=cfg["http_path"].strip(),
+        access_token=cfg["access_token"].strip(),
     )
-    return pyodbc.connect(conn_str)
 
 
 def read_sql(query):
-    conn = get_connection()
-    try:
-        return pd.read_sql(query, conn)
-    finally:
-        conn.close()
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(query)
+            columns = [column[0] for column in cursor.description]
+            return pd.DataFrame.from_records(
+                cursor.fetchall(), columns=columns, coerce_float=True
+            )
 
 
 # --- Carga de datos con caché ---
@@ -1857,7 +1914,7 @@ def cargar_datos():
 
     r = read_sql(
         f"SELECT {', '.join(cols + ['status'])} "
-        "FROM bv_hop_registroclientes"
+        "FROM `engie_mex_apm`.`03-gold`.`denodo_registroclientes`"
     )
 
     con = read_sql(
@@ -1867,9 +1924,9 @@ def cargar_datos():
         "    EXTRACT(MONTH FROM fecha) AS mes, "
         "    EXTRACT(DAY FROM fecha) AS dia, "
         "    SUM(consumo_gj) AS CONSUMO "
-        "FROM bv_hop_consumos "
-        "WHERE fecha >= '2026-01-01' "
-        "  AND archivado = 0 "
+        "FROM `engie_mex_apm`.`03-gold`.`denodo_consumos` "
+        "WHERE fecha >= DATE '2026-01-01' "
+        "  AND archivado = FALSE "
         "GROUP BY "
         "    id_instalacion, "
         "    EXTRACT(YEAR FROM fecha), "
@@ -1933,11 +1990,11 @@ def cargar_datos():
 
 @st.cache_data(ttl=3600)
 def cargar_datos_garantias():
-    """Devuelve el detalle de garantías (bv_hop_garantia), una fila por
+    """Devuelve el detalle de garantías (denodo_garantia), una fila por
     garantía/documento. Análogo a `cargar_datos()` pero para la pestaña
     Garantías; no incluye consumo diario (esa tabla no aplica aquí).
 
-    Adaptaciones respecto a `cargar_datos()` (bv_hop_garantia no tiene una
+    Adaptaciones respecto a `cargar_datos()` (denodo_garantia no tiene una
     tabla de zonas geográficas como ZONAS, así que se usa `ldc` como
     dimensión equivalente a 'zona'):
       - 'zona' se deriva de `ldc` (en vez de `zona_vpm`).
@@ -1946,7 +2003,7 @@ def cargar_datos_garantias():
     cols = COLS_GARANTIA
 
     df = read_sql(
-        f"SELECT {', '.join(cols)} FROM bv_hop_garantia"
+        f"SELECT {', '.join(cols)} FROM `engie_mex_apm`.`03-gold`.`denodo_garantia`"
     )
 
     df = df.dropna(subset=['razon_social'])
@@ -2139,21 +2196,20 @@ def calcular_zona_geografica(df):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _pipeline_geo(status_seleccionados: tuple) -> pd.DataFrame:
-    """Geocodificación + zona/zona_geografica para los clientes con status en
+    """Geocodificación + zona del dato maestro para los clientes con status en
     `status_seleccionados`, cacheado por esa tupla de status.
 
     Deliberadamente NO depende del filtro de fecha (rango de consumo): así
     Streamlit reutiliza el resultado cacheado en cada interacción del
     date_input/slider de periodo, en vez de repetir la geocodificación
-    (pgeocode) y el cálculo de zona (shapely) que solo dependen del status
-    seleccionado, no del rango de fechas."""
+    (pgeocode), que solo depende del status seleccionado, no del rango de
+    fechas."""
     df_todos, _ = cargar_datos()
     df_status = df_todos[df_todos['status_norm'].isin(status_seleccionados)].copy()
     if df_status.empty:
         return df_status
     df_g = agregar_coordenadas(df_status)
     df_g = asignar_zona(df_g)
-    df_g = calcular_zona_geografica(df_g)
     return df_g
 
 
@@ -2249,8 +2305,24 @@ def _top_n_y_ranking_previo(df_local: pd.DataFrame, col: str, col_prev, n_top: i
     return top, ranking_prev
 
 
+def _dataframe_para_excel(df: pd.DataFrame) -> pd.DataFrame:
+    """Quita zonas horarias solo para Excel, conservando la fecha y hora visibles."""
+    resultado = df.copy()
+    for columna in resultado.columns:
+        serie = resultado[columna]
+        if isinstance(serie.dtype, pd.DatetimeTZDtype):
+            resultado[columna] = serie.dt.tz_localize(None)
+        elif pd.api.types.is_object_dtype(serie.dtype):
+            resultado[columna] = serie.map(
+                lambda valor: valor.replace(tzinfo=None)
+                if isinstance(valor, datetime) and valor.tzinfo is not None
+                else valor
+            )
+    return resultado
+
+
 def _excel_bytes_desde_hojas(hojas: dict[str, pd.DataFrame]) -> bytes:
-    """Construye un archivo Excel en memoria con una hoja por DataFrame."""
+    """Construye un Excel sin zonas horarias ni cambios a los DataFrames originales."""
     buffer = BytesIO()
     with pd.ExcelWriter(
         buffer,
@@ -2259,7 +2331,9 @@ def _excel_bytes_desde_hojas(hojas: dict[str, pd.DataFrame]) -> bytes:
         datetime_format='dd/mm/yyyy',
     ) as writer:
         for nombre_hoja, df_hoja in hojas.items():
-            df_hoja.to_excel(writer, index=False, sheet_name=nombre_hoja[:31])
+            _dataframe_para_excel(df_hoja).to_excel(
+                writer, index=False, sheet_name=nombre_hoja[:31]
+            )
     return buffer.getvalue()
 
 
@@ -3679,6 +3753,15 @@ with st.sidebar:
             value=valor_actual,
             on_change=sync_gj_global_from_slider,
         )
+        st.pills(
+            "Tipo de filtro",
+            options=["Suma", "Promedio"],
+            selection_mode="single",
+            key="gj_filter_type",
+            default="Suma",
+            label_visibility="visible",
+        )
+
         antd_number_input(
             "GJ mínimo (exacto)",
             value=valor_actual,
@@ -3689,15 +3772,6 @@ with st.sidebar:
             empty_value=0,
             key="min_gj_global_exact_antd",
             on_change=sync_gj_global_from_antd,
-        )
-
-        st.pills(
-            "Tipo de filtro",
-            options=["Suma", "Promedio"],
-            selection_mode="single",
-            key="gj_filter_type",
-            default="Suma",
-            label_visibility="visible",
         )
 
         valor_max_actual = st.session_state.get("max_gj_global_exact")
@@ -4646,8 +4720,7 @@ def render_salud_ciclo_vida(cfg):
     dias_alerta = 90
 
     activos_df = ciclo_df[ciclo_df["status_norm"] == cfg["alert_status_value"]].copy()
-    hoy = pd.Timestamp(datetime.now().date())
-    activos_df["dias_restantes"] = (activos_df["vigencia"] - hoy).dt.days
+    activos_df["dias_restantes"] = _calcular_dias_restantes(activos_df["vigencia"])
 
     # Normalizar texto de renovación para cubrir "Automática/No Automática" con y sin tildes.
     renovacion_norm = activos_df["renovacion"].fillna("").astype(str).str.strip().str.lower()
@@ -4895,14 +4968,14 @@ CARTERA_CONFIG = {
 
 # --- Configuración de la vista Garantías (fuente: cargar_datos_garantias) ---
 # Adaptaciones respecto a Cartera (mismo criterio de la versión previa):
-#   - "Zona" -> `ldc` (bv_hop_garantia no tiene zona geográfica ZONAS).
+#   - "Zona" -> `ldc` (denodo_garantia no tiene zona geográfica ZONAS).
 #   - Alta/Baja -> `fecha_emision`/`fecha_devolucion`.
 #   - Vigencia contractual -> `fecha_vigencia`.
 #   - Solo 3 status reales (Vigente/Liberado/Vencido), sin equivalente de "Pre Activo".
 GARANTIAS_CONFIG = {
     "subheader": "Salud de garantías y ciclo de vida de solicitudes",
     "caption": (
-        "Esta sección utiliza la tabla de garantías (bv_hop_garantia) de forma "
+        "Esta sección utiliza la tabla de garantías (denodo_garantia) de forma "
         "independiente y siempre incluye todos los status (Vigente, Liberado, Vencido), "
         "sin importar el filtro de status de clientes de la barra lateral."
     ),
@@ -5360,17 +5433,10 @@ elif seccion == "Reportes":
                     st.session_state["gestion_columnas_draft"] = list(columnas_orden)
             with col_btn_export:
                 if df_reporte_final is not None:
-                    buffer_export = BytesIO()
-                    with pd.ExcelWriter(
-                        buffer_export,
-                        engine='xlsxwriter',
-                        date_format='dd/mm/yyyy',
-                        datetime_format='dd/mm/yyyy',
-                    ) as writer:
-                        df_reporte_final.to_excel(writer, index=False, sheet_name='Reporte')
+                    excel_export = _excel_bytes_desde_hojas({"Reporte": df_reporte_final})
                     st.download_button(
                         "Export",
-                        buffer_export.getvalue(),
+                        excel_export,
                         "reporte_personalizado.xlsx",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="dl_excel_reporte_header",
