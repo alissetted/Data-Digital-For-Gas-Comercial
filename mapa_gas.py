@@ -207,7 +207,7 @@ st.markdown("""
         color: #FFFFFF !important;
         fill: #FFFFFF !important;
     }
-    /* Number input (ej. "GJ mínimo (exacto)"): el texto hereda color blanco
+    /* Number input (ej. "GJ máximo (exacto)"): el texto hereda color blanco
        del sidebar y queda invisible sobre el fondo blanco del campo. */
     section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input {
         color: #1F2937 !important;
@@ -253,6 +253,69 @@ st.markdown("""
     }
     div[role="option"]:hover {
         background: #E5F1FF !important;
+    }
+    /* Pills del tipo de filtro en el Sidebar */
+    section[data-testid="stSidebar"] .st-key-gj_filter_type {
+        min-height: auto !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type [data-testid="stButtonGroup"] > :is([role="group"], [role="radiogroup"]) {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        gap: 0 !important;
+        width: 100% !important;
+        border: 1px solid #D7E4F3 !important;
+        border-radius: 999px !important;
+        overflow: hidden !important;
+        background: #FFFFFF !important;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type button[data-variant="pills"] {
+        font-size: 0.85rem !important;
+        font-weight: 700 !important;
+        padding: 0.6rem 0.8rem !important;
+        min-height: 36px !important;
+        border-radius: 0 !important;
+        color: #1F2937 !important;
+        background: #FFFFFF !important;
+        border: none !important;
+        flex: 1 !important;
+        margin: 0 !important;
+        box-shadow: none !important;
+        text-align: center !important;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type button[data-variant="pills"]:is([aria-checked="true"], [aria-pressed="true"]) {
+        background: linear-gradient(135deg, #0077CC 0%, #003C88 100%) !important;
+        color: #FFFFFF !important;
+        border-color: transparent !important;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type button[data-variant="pills"]:hover {
+        transform: none !important;
+        background: #F3F8FF !important;
+        transition: all 0.15s ease;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type button[data-variant="pills"] * {
+        color: #1F2937 !important;
+        fill: #1F2937 !important;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type button[data-variant="pills"]:is([aria-checked="true"], [aria-pressed="true"]) * {
+        color: #FFFFFF !important;
+        fill: #FFFFFF !important;
+    }
+    section[data-testid="stSidebar"] .st-key-gj_filter_type button[data-variant="pills"]:is([aria-checked="true"], [aria-pressed="true"]):hover {
+        background: linear-gradient(135deg, #0077CC 0%, #003C88 100%) !important;
+        color: #FFFFFF !important;
+    }
+    /* Etiqueta de las pills en el Sidebar */
+    section[data-testid="stSidebar"] .st-key-gj_filter_type label {
+        font-size: 0.72rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.6px !important;
+        text-transform: uppercase !important;
+        color: #FFFFFF !important;
+        margin-bottom: 0.5rem !important;
     }
     /* Selector Clientes/Garantías como botón de acción */
     div[data-testid="stSegmentedControl"] {
@@ -492,6 +555,9 @@ st.markdown(
     }
     section[data-testid="stSidebar"] div[class*="st-key-sidebar_period_section"] .engie-section {
         margin-top: 4px;
+    }
+    section[data-testid="stSidebar"] div[class*="st-key-sidebar_period_section"] {
+        margin-top: -0.8rem;
     }
     section[data-testid="stSidebar"] .stDivider {
         margin: 0.1rem 0 0.2rem;
@@ -2533,7 +2599,7 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                 # en vez de llamar a una función Python (color_de) por cada fila
                 # dentro del loop de creación de marcadores.
                 consumo_arr = pd.to_numeric(df_z[col_consumo], errors='coerce').fillna(0).to_numpy(dtype=float)
-                radios_arr = 5 + (consumo_arr / max_c) * 25
+                radios_arr = 7 + np.sqrt(np.clip(consumo_arr / max_c, 0, None)) * 23
                 colores_arr = np.select(
                     [consumo_arr <= l1, consumo_arr <= l2, consumo_arr <= l3, consumo_arr <= l4],
                     ['#CCD4DA', '#7FA8D8', '#278CBC', '#007BC5'],
@@ -2566,10 +2632,19 @@ def crear_mapa(df, col_consumo, zona_sel, datos_kml=None, carpetas_kml=None, min
                     if spread_html:
                         tooltip_parts.append(f"<br>{spread_html}")
                     tooltip = "".join(tooltip_parts)
+                    # Anillo blanco de 2 px por fuera (trazo centrado en radio + 1).
                     folium.CircleMarker(
                         location=[row[idx_lat], row[idx_lon]],
-                        radius=radio,
-                        color=col,
+                        radius=radio + 1,
+                        color='#FFFFFF',
+                        fill=False,
+                        weight=2,
+                    ).add_to(fg)
+                    # Relleno sin cambios; borde oscuro de 1 px por dentro (radio - 0.5 + trazo 1).
+                    folium.CircleMarker(
+                        location=[row[idx_lat], row[idx_lon]],
+                        radius=radio - 0.5,
+                        color='#1F2A33',
                         fill=True,
                         fill_color=col,
                         fill_opacity=0.7,
@@ -2769,6 +2844,460 @@ def _calcular_limite_slider_gj(serie):
     return limite, _calcular_step_gj(limite)
 
 
+# ===== Entrada numérica Ant Design con allowClear ("X" integrada) =====
+# antd `InputNumber` no soporta allowClear, por eso se usa antd `Input` con
+# allowClear + validación numérica (solo dígitos, límites min/max, ↑/↓ = step).
+# El valor se confirma con Enter, al perder el foco o al pulsar la "X".
+# React/antd se cargan desde CDN; si no hay acceso, se usa un fallback HTML
+# con el mismo comportamiento para que el filtro nunca quede inutilizable.
+_ANTD_NUMBER_INPUT_CSS = """
+section[data-testid="stSidebar"] .ani-root .ani-label,
+.ani-root .ani-label {
+    display: block;
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+section[data-testid="stSidebar"] .ani-root .ant-input-affix-wrapper,
+section[data-testid="stSidebar"] .ani-root .ant-input,
+section[data-testid="stSidebar"] .ani-root .ani-fallback input {
+    background: #FFFFFF !important;
+}
+section[data-testid="stSidebar"] .ani-root input {
+    color: #1F2937 !important;
+}
+section[data-testid="stSidebar"] .ani-root input::placeholder {
+    color: #9AA5B1 !important;
+    opacity: 1 !important;
+}
+section[data-testid="stSidebar"] .ani-root .ant-input-clear-icon,
+section[data-testid="stSidebar"] .ani-root .ant-input-clear-icon * {
+    color: rgba(0, 0, 0, 0.25) !important;
+    fill: currentColor !important;
+}
+section[data-testid="stSidebar"] .ani-root .ant-input-clear-icon:hover,
+section[data-testid="stSidebar"] .ani-root .ant-input-clear-icon:hover * {
+    color: rgba(0, 0, 0, 0.45) !important;
+}
+.ani-root .ani-fallback { position: relative; }
+.ani-root .ani-fallback input {
+    width: 100%;
+    height: 40px;
+    box-sizing: border-box;
+    padding: 0 34px 0 12px;
+    font-size: 14px;
+    border: 1.5px solid #D7E4F3;
+    border-radius: 14px;
+    outline: none;
+}
+.ani-root .ani-fallback input:focus {
+    border-color: #0077CC;
+    box-shadow: 0 0 0 3px rgba(0, 119, 204, 0.15);
+}
+.ani-root .ani-fallback input.ani-warning { border-color: #faad14; }
+.ani-root .ani-fallback .ani-clear {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: none;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.25) !important;
+    color: #FFFFFF !important;
+    font-size: 10px;
+    line-height: 16px;
+    cursor: pointer;
+    display: none;
+}
+.ani-root .ani-fallback .ani-clear:hover { background: rgba(0, 0, 0, 0.45) !important; }
+.ani-root .ani-fallback.ani-has-value .ani-clear { display: block; }
+"""
+
+_ANTD_NUMBER_INPUT_JS = r"""
+const CDN = {
+  react: [
+    "https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js",
+    "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
+  ],
+  reactDom: [
+    "https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js",
+    "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
+  ],
+  dayjs: [
+    "https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js",
+    "https://unpkg.com/dayjs@1.11.13/dayjs.min.js",
+  ],
+  antd: [
+    "https://cdn.jsdelivr.net/npm/antd@5.22.7/dist/antd.min.js",
+    "https://unpkg.com/antd@5.22.7/dist/antd.min.js",
+  ],
+};
+
+function loadScript(urls) {
+  return new Promise((resolve, reject) => {
+    let i = 0;
+    const next = () => {
+      if (i >= urls.length) { reject(new Error("No se pudo cargar " + urls[0])); return; }
+      const s = document.createElement("script");
+      s.src = urls[i++];
+      s.async = true;
+      s.onload = () => resolve();
+      s.onerror = () => { s.remove(); next(); };
+      document.head.appendChild(s);
+    };
+    next();
+  });
+}
+
+function loadAntd() {
+  if (window.React && window.ReactDOM && window.antd && window.antd.Input) return Promise.resolve();
+  if (!window.__aniAntdLoader) {
+    const seq = async () => {
+      if (!window.React) await loadScript(CDN.react);
+      if (!window.ReactDOM) await loadScript(CDN.reactDom);
+      if (!window.dayjs) await loadScript(CDN.dayjs);
+      if (!window.antd) await loadScript(CDN.antd);
+      if (!window.antd || !window.antd.Input || !window.ReactDOM.createRoot) {
+        throw new Error("antd no disponible");
+      }
+    };
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000));
+    window.__aniAntdLoader = Promise.race([seq(), timeout]);
+  }
+  return window.__aniAntdLoader;
+}
+
+function toNumber(v) {
+  if (v === null || v === undefined || v === "" || v === "-") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+function clamp(n, d) {
+  const min = toNumber(d.min_value), max = toNumber(d.max_value);
+  if (min !== null && n < min) n = min;
+  if (max !== null && n > max) n = max;
+  return n;
+}
+function textFor(v, d) {
+  const n = toNumber(v);
+  if (n === null) return "";
+  const empty = toNumber(d.empty_value);
+  return empty !== null && n === empty ? "" : String(n);
+}
+function isValidPartial(text, d) {
+  const min = toNumber(d.min_value);
+  return (min === null || min < 0 ? /^-?\d*$/ : /^\d*$/).test(text);
+}
+function isOutOfRange(text, d) {
+  const n = toNumber(text);
+  return n !== null && clamp(n, d) !== n;
+}
+function stepFrom(text, d, dir) {
+  const step = toNumber(d.step) || 1;
+  let base = toNumber(text);
+  if (base === null) base = toNumber(d.empty_value) || 0;
+  return String(base + dir * step);
+}
+
+function createInstance(parentElement) {
+  const host = document.createElement("div");
+  host.className = "ani-root";
+  parentElement.appendChild(host);
+
+  const inst = {
+    host,
+    data: {},
+    setTrigger: null,
+    lastProp: undefined,
+    lastSent: undefined,
+    version: 0,
+    mode: null,
+    reactRoot: null,
+    fallback: null,
+    destroyed: false,
+  };
+
+  // Normaliza, limita al rango y envía el valor a Python (evento "commit").
+  inst.commit = (raw) => {
+    let n = toNumber(raw);
+    if (n !== null) n = clamp(n, inst.data);
+    if (n !== inst.lastSent) {
+      inst.lastSent = n;
+      if (inst.setTrigger) inst.setTrigger("commit", { value: n });
+    }
+    return n;
+  };
+
+  inst.update = (data) => {
+    inst.data = data || {};
+    const propValue = toNumber(inst.data.value);
+    if (propValue !== inst.lastProp) {
+      inst.lastProp = propValue;
+      inst.lastSent = propValue;
+      inst.version += 1;
+    }
+    inst.render();
+  };
+
+  inst.render = () => {
+    if (inst.destroyed) return;
+    if (inst.mode === "antd") renderAntd(inst);
+    else renderFallback(inst);
+  };
+
+  inst.destroy = () => {
+    inst.destroyed = true;
+    if (inst.reactRoot) inst.reactRoot.unmount();
+    host.remove();
+  };
+
+  loadAntd()
+    .then(() => {
+      const upgrade = () => {
+        if (inst.destroyed) return;
+        host.innerHTML = "";
+        inst.fallback = null;
+        inst.mode = "antd";
+        inst.reactRoot = window.ReactDOM.createRoot(host);
+        inst.render();
+      };
+      const fbInput = inst.fallback && inst.fallback.input;
+      if (fbInput && document.activeElement === fbInput) {
+        fbInput.addEventListener("blur", () => setTimeout(upgrade, 0), { once: true });
+      } else {
+        upgrade();
+      }
+    })
+    .catch((err) => console.warn("antd_number_input: usando fallback sin antd.", err));
+
+  return inst;
+}
+
+let AntdNumberInput = null;
+function getAntdComponent() {
+  if (AntdNumberInput) return AntdNumberInput;
+  const React = window.React, antd = window.antd, h = React.createElement;
+
+  AntdNumberInput = function (props) {
+    const { inst, data, version } = props;
+    const [text, setText] = React.useState(() => textFor(inst.lastProp, data));
+    const [status, setStatus] = React.useState("");
+
+    React.useEffect(() => {
+      setText(textFor(inst.lastProp, data));
+      setStatus("");
+    }, [version]);
+
+    const commit = (raw) => {
+      const n = inst.commit(raw);
+      setText(textFor(n, data));
+      setStatus("");
+    };
+
+    return h(antd.ConfigProvider, {
+        theme: {
+          token: {
+            colorPrimary: "#0077CC",
+            colorBorder: "#D7E4F3",
+            colorText: "#1F2937",
+            colorTextPlaceholder: "#9AA5B1",
+            colorBgContainer: "#FFFFFF",
+            borderRadius: 14,
+            controlHeight: 40,
+            fontSize: 14,
+            fontFamily: "inherit",
+          },
+        },
+      },
+      h("div", null,
+        data.label ? h("label", {
+          className: "ani-label",
+          style: data.label_color ? { color: data.label_color } : undefined,
+        }, data.label) : null,
+        h(antd.Input, {
+          value: text,
+          allowClear: true,
+          inputMode: "numeric",
+          autoComplete: "off",
+          placeholder: data.placeholder || "",
+          "aria-label": data.label || undefined,
+          status: status || undefined,
+          style: { borderWidth: 1.5 },
+          onChange: (e) => {
+            const raw = e.target.value;
+            // Clic en la "X" integrada (allowClear): limpia y aplica de inmediato.
+            if (e.type === "click" && raw === "") { commit(""); return; }
+            if (!isValidPartial(raw, data)) { setStatus("error"); return; }
+            setText(raw);
+            setStatus(isOutOfRange(raw, data) ? "warning" : "");
+          },
+          onPressEnter: (e) => commit(e.target.value),
+          onBlur: (e) => commit(e.target.value),
+          onKeyDown: (e) => {
+            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+              e.preventDefault();
+              commit(stepFrom(e.target.value, data, e.key === "ArrowUp" ? 1 : -1));
+            }
+          },
+        })
+      )
+    );
+  };
+  return AntdNumberInput;
+}
+
+function renderAntd(inst) {
+  const h = window.React.createElement;
+  inst.reactRoot.render(h(getAntdComponent(), { inst, data: inst.data, version: inst.version }));
+}
+
+function renderFallback(inst) {
+  let fb = inst.fallback;
+  if (!fb) {
+    inst.host.innerHTML =
+      '<label class="ani-label"></label>' +
+      '<div class="ani-fallback"><input inputmode="numeric" autocomplete="off" />' +
+      '<button type="button" class="ani-clear" aria-label="Limpiar" title="Limpiar">&#10005;</button></div>';
+    fb = inst.fallback = {
+      label: inst.host.querySelector(".ani-label"),
+      wrap: inst.host.querySelector(".ani-fallback"),
+      input: inst.host.querySelector("input"),
+      clear: inst.host.querySelector(".ani-clear"),
+      prevText: "",
+      version: -1,
+    };
+    const setText = (t) => {
+      fb.input.value = t;
+      fb.prevText = t;
+      fb.wrap.classList.toggle("ani-has-value", t !== "");
+      fb.input.classList.remove("ani-warning");
+    };
+    const commit = (raw) => setText(textFor(inst.commit(raw), inst.data));
+    fb.setText = setText;
+    fb.input.addEventListener("input", () => {
+      const raw = fb.input.value;
+      if (!isValidPartial(raw, inst.data)) { fb.input.value = fb.prevText; return; }
+      fb.prevText = raw;
+      fb.wrap.classList.toggle("ani-has-value", raw !== "");
+      fb.input.classList.toggle("ani-warning", isOutOfRange(raw, inst.data));
+    });
+    fb.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") commit(fb.input.value);
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        e.preventDefault();
+        commit(stepFrom(fb.input.value, inst.data, e.key === "ArrowUp" ? 1 : -1));
+      }
+    });
+    fb.input.addEventListener("blur", () => commit(fb.input.value));
+    fb.clear.addEventListener("mousedown", (e) => e.preventDefault());
+    fb.clear.addEventListener("click", () => commit(""));
+  }
+  const d = inst.data;
+  fb.label.textContent = d.label || "";
+  fb.label.style.display = d.label ? "block" : "none";
+  if (d.label_color) fb.label.style.color = d.label_color;
+  fb.input.placeholder = d.placeholder || "";
+  if (d.label) fb.input.setAttribute("aria-label", d.label);
+  if (fb.version !== inst.version) {
+    fb.version = inst.version;
+    fb.setText(textFor(inst.lastProp, d));
+  }
+}
+
+export default function (component) {
+  const { data, parentElement, setTriggerValue } = component;
+  let inst = parentElement.__aniInstance;
+  if (!inst || inst.destroyed) {
+    inst = createInstance(parentElement);
+    parentElement.__aniInstance = inst;
+  }
+  inst.setTrigger = setTriggerValue;
+  inst.update(data);
+  return () => {
+    inst.destroy();
+    if (parentElement.__aniInstance === inst) delete parentElement.__aniInstance;
+  };
+}
+"""
+
+
+@st.cache_resource(show_spinner=False)
+def _get_antd_number_input_component():
+    from streamlit.components.v2 import component as st_component_v2
+
+    # isolate_styles=False: los estilos CSS-in-JS de antd se inyectan en
+    # document.head y no alcanzarían un shadow root.
+    return st_component_v2(
+        "antd_number_input",
+        css=_ANTD_NUMBER_INPUT_CSS,
+        js=_ANTD_NUMBER_INPUT_JS,
+        isolate_styles=False,
+    )
+
+
+def antd_number_input(
+    label,
+    *,
+    value,
+    min_value=None,
+    max_value=None,
+    step=1,
+    placeholder="",
+    empty_value=None,
+    key,
+    on_change=None,
+):
+    """Entrada numérica (enteros) de Ant Design con "X" integrada para limpiar.
+
+    `on_change` se ejecuta cada vez que el usuario confirma un valor; el valor
+    confirmado (int o None si se limpió) está en
+    ``st.session_state[key]["commit"]["value"]``. Si `empty_value` coincide con
+    el valor, el campo se muestra vacío (con `placeholder`).
+    """
+    componente = _get_antd_number_input_component()
+    return componente(
+        key=key,
+        data={
+            "label": label,
+            "value": None if value is None else int(value),
+            "min_value": min_value,
+            "max_value": max_value,
+            "step": step,
+            "placeholder": placeholder,
+            "empty_value": empty_value,
+        },
+        on_commit_change=on_change if on_change is not None else (lambda: None),
+    )
+
+
+def _leer_valor_antd_number_input(key):
+    estado = st.session_state.get(key)
+    if estado is None:
+        return False, None
+    evento = estado.get("commit") if hasattr(estado, "get") else getattr(estado, "commit", None)
+    if not isinstance(evento, dict):
+        return False, None
+    valor = evento.get("value")
+    try:
+        return True, (None if valor is None else int(valor))
+    except (TypeError, ValueError):
+        return True, None
+
+
+def sync_gj_global_from_antd():
+    recibido, valor = _leer_valor_antd_number_input("min_gj_global_exact_antd")
+    if not recibido:
+        return
+    st.session_state["min_gj_global_exact"] = valor
+    sync_gj_global_from_exact()
+
+
 def sync_gj_global_from_slider():
     maximo = int(st.session_state.get("max_gj_global", 0))
     valor = int(st.session_state.get("min_gj_global_slider", 0))
@@ -2784,6 +3313,24 @@ def sync_gj_global_from_exact():
     valor = max(0, min(valor, maximo))
     st.session_state["min_gj_global"] = valor
     st.session_state["min_gj_global_slider"] = valor
+
+
+def sync_max_gj_global_from_antd():
+    recibido, valor = _leer_valor_antd_number_input("max_gj_global_exact_antd")
+    if recibido:
+        st.session_state["max_gj_global_exact"] = valor
+
+
+def maximo_consumo_mensual_zona(df, cols_mensuales, zona_sel):
+    """Mayor consumo_gj_mensual (cliente-mes) dentro de la zona activa."""
+    if df.empty or not cols_mensuales:
+        return 0
+    base = df
+    if zona_sel != "Vista general" and 'zona' in df.columns:
+        base = df[normalizar_zona_clave_serie(df['zona']) == normalizar_zona_clave(zona_sel)]
+    valores = base[cols_mensuales].apply(lambda s: pd.to_numeric(s, errors='coerce')).to_numpy(dtype=float).ravel()
+    valores = valores[~np.isnan(valores)]
+    return int(np.ceil(valores.max())) if valores.size else 0
 
 
 def reconciliar_gj_global():
@@ -3083,6 +3630,13 @@ if not df_geo.empty and 'Consumo_Total_Periodo_GJ' in df_geo.columns:
 st.session_state["max_gj_global"] = max_gj_global_ui if max_gj_global_ui > 0 else max_gj_global
 reconciliar_gj_global()
 
+# Tope por defecto = mayor consumo_gj_mensual de la zona; se restablece al cambiar zona, status o periodo.
+tope_gj_mensual = maximo_consumo_mensual_zona(df_mostrar, cols_periodo_sel, zona_sel_global) or max_gj_global
+firma_max_gj = (zona_sel_global, tope_gj_mensual)
+if st.session_state.get("max_gj_exact_firma") != firma_max_gj:
+    st.session_state["max_gj_exact_firma"] = firma_max_gj
+    st.session_state["max_gj_global_exact"] = tope_gj_mensual
+
 with st.sidebar:
     st.markdown('<div class="engie-section">Filtrar por zona</div>', unsafe_allow_html=True)
     opciones_zona_filtrables = [z for z in opciones_zona if z != "Vista general"]
@@ -3125,14 +3679,40 @@ with st.sidebar:
             value=valor_actual,
             on_change=sync_gj_global_from_slider,
         )
-        st.number_input(
+        antd_number_input(
             "GJ mínimo (exacto)",
+            value=valor_actual,
             min_value=0,
             max_value=slider_max,
             step=slider_step_gj,
-            value=valor_actual,
-            key="min_gj_global_exact",
-            on_change=sync_gj_global_from_exact,
+            placeholder="0",
+            empty_value=0,
+            key="min_gj_global_exact_antd",
+            on_change=sync_gj_global_from_antd,
+        )
+
+        st.pills(
+            "Tipo de filtro",
+            options=["Suma", "Promedio"],
+            selection_mode="single",
+            key="gj_filter_type",
+            default="Suma",
+            label_visibility="visible",
+        )
+
+        valor_max_actual = st.session_state.get("max_gj_global_exact")
+        if valor_max_actual is not None:
+            valor_max_actual = max(0, min(int(valor_max_actual), tope_gj_mensual))
+        antd_number_input(
+            "GJ máximo (exacto)",
+            value=valor_max_actual,
+            min_value=0,
+            max_value=tope_gj_mensual,
+            step=slider_step_gj,
+            placeholder=str(tope_gj_mensual),
+            empty_value=None,
+            key="max_gj_global_exact_antd",
+            on_change=sync_max_gj_global_from_antd,
         )
     else:
         st.caption("Sin consumo para aplicar filtro de GJ en el contexto actual.")
@@ -3160,16 +3740,21 @@ ui_max_gj = max_gj_global_ui if max_gj_global_ui > 0 else max_gj_global
 if max_gj_global > 0:
     min_gj_global = max(0, min(min_gj_global, ui_max_gj))
 
+valor_max_sesion = st.session_state.get("max_gj_global_exact")
+max_gj_global_exact = tope_gj_mensual
+if max_gj_global > 0 and valor_max_sesion is not None:
+    max_gj_global_exact = max(0, min(int(valor_max_sesion), tope_gj_mensual))
+
 # Guardar df_geo sin el filtro de GJ para los graficos de distribucion por zona.
 # Solo se necesitan 'zona' + las columnas de consumo (no todo el dataframe),
 # lo que evita copiar decenas de columnas irrelevantes para estos gráficos.
 _cols_todas_zonas = list(dict.fromkeys(['zona', 'Consumo_Total_Periodo_GJ'] + list(cols_consumo)))
 df_geo_todas_zonas = df_geo[[c for c in _cols_todas_zonas if c in df_geo.columns]].copy()
 
-if min_gj_global > 0 and not df_geo.empty:
-    df_geo = df_geo[
-        pd.to_numeric(df_geo['Consumo_Total_Periodo_GJ'], errors='coerce').fillna(0) >= min_gj_global
-    ].copy()
+if (min_gj_global > 0 or max_gj_global_exact < tope_gj_mensual) and not df_geo.empty:
+    consumo_column = pd.to_numeric(df_geo['Consumo_Total_Periodo_GJ'], errors='coerce').fillna(0)
+    mask = (consumo_column >= min_gj_global) & (consumo_column <= max_gj_global_exact)
+    df_geo = df_geo[mask].copy()
 
 # ===== FILTRO GLOBAL DE ZONA (alcance GLOBAL, igual que el filtro de volumen) =====
 # Afecta Reportes y Dashboard directamente sobre df_geo. El Mapa usa aparte
@@ -3371,14 +3956,288 @@ def _bloque_donut_zona(col, vol_zona, clientes_zona):
                 )
 
 
-def _fijar_checkboxes_segmentacion(claves, valor):
-    for clave in claves:
-        st.session_state[clave] = valor
+# ===== Checkboxes Ant Design con "Seleccionar todo" (estado indeterminado) =====
+# Mismo esquema que `antd_number_input`: antd desde CDN y fallback en HTML nativo.
+_ANTD_CHECK_ALL_CSS = """
+.acg-root { font-size: 14px; color: #1F2937; }
+.acg-root .acg-group { display: grid; gap: 6px; margin-top: 4px; }
+.acg-root .acg-group .ant-checkbox-wrapper { margin-inline-start: 0; }
+.acg-root .acg-fb-all,
+.acg-root .acg-fb-item { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.acg-root .acg-fb-all { font-weight: 500; }
+.acg-root .acg-fb-list { display: grid; gap: 6px; margin-top: 4px; }
+.acg-root .acg-fb-sep { border: 0; border-top: 1px solid #E5E7EB; margin: 8px 0; }
+"""
+
+_ANTD_CHECK_ALL_JS = r"""
+const CDN = {
+  react: [
+    "https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js",
+    "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
+  ],
+  reactDom: [
+    "https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js",
+    "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
+  ],
+  dayjs: [
+    "https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js",
+    "https://unpkg.com/dayjs@1.11.13/dayjs.min.js",
+  ],
+  antd: [
+    "https://cdn.jsdelivr.net/npm/antd@5.22.7/dist/antd.min.js",
+    "https://unpkg.com/antd@5.22.7/dist/antd.min.js",
+  ],
+};
+
+function loadScript(urls) {
+  return new Promise((resolve, reject) => {
+    let i = 0;
+    const next = () => {
+      if (i >= urls.length) { reject(new Error("No se pudo cargar " + urls[0])); return; }
+      const s = document.createElement("script");
+      s.src = urls[i++];
+      s.async = true;
+      s.onload = () => resolve();
+      s.onerror = () => { s.remove(); next(); };
+      document.head.appendChild(s);
+    };
+    next();
+  });
+}
+
+function loadAntd() {
+  if (window.React && window.ReactDOM && window.antd && window.antd.Checkbox) return Promise.resolve();
+  if (!window.__aniAntdLoader) {
+    const seq = async () => {
+      if (!window.React) await loadScript(CDN.react);
+      if (!window.ReactDOM) await loadScript(CDN.reactDom);
+      if (!window.dayjs) await loadScript(CDN.dayjs);
+      if (!window.antd) await loadScript(CDN.antd);
+      if (!window.antd || !window.antd.Checkbox || !window.ReactDOM.createRoot) {
+        throw new Error("antd no disponible");
+      }
+    };
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000));
+    window.__aniAntdLoader = Promise.race([seq(), timeout]);
+  }
+  return window.__aniAntdLoader;
+}
+
+function keepOptions(valores, opciones) {
+  return opciones.filter((o) => valores.includes(o));
+}
+
+function createInstance(parentElement) {
+  const host = document.createElement("div");
+  host.className = "acg-root";
+  parentElement.appendChild(host);
+
+  const inst = {
+    host,
+    data: {},
+    current: [],
+    lastSig: null,
+    setTrigger: null,
+    mode: null,
+    reactRoot: null,
+    fallback: null,
+    destroyed: false,
+  };
+
+  // Cambio del usuario: actualiza la vista y envía la selección a Python.
+  inst.change = (next) => {
+    const opciones = inst.data.options || [];
+    inst.current = keepOptions(next, opciones);
+    if (inst.setTrigger) inst.setTrigger("commit", { value: inst.current, options: opciones });
+    inst.render();
+  };
+
+  inst.update = (data) => {
+    inst.data = data || {};
+    const opciones = inst.data.options || [];
+    const valor = inst.data.value || [];
+    const sig = JSON.stringify([valor, opciones]);
+    if (sig !== inst.lastSig) {
+      inst.lastSig = sig;
+      inst.current = keepOptions(valor, opciones);
+    }
+    inst.render();
+  };
+
+  inst.render = () => {
+    if (inst.destroyed) return;
+    if (inst.mode === "antd") renderAntd(inst);
+    else renderFallback(inst);
+  };
+
+  inst.destroy = () => {
+    inst.destroyed = true;
+    if (inst.reactRoot) inst.reactRoot.unmount();
+    host.remove();
+  };
+
+  loadAntd()
+    .then(() => {
+      if (inst.destroyed) return;
+      host.innerHTML = "";
+      inst.fallback = null;
+      inst.mode = "antd";
+      inst.reactRoot = window.ReactDOM.createRoot(host);
+      inst.render();
+    })
+    .catch((err) => console.warn("antd_check_all: usando fallback sin antd.", err));
+
+  return inst;
+}
+
+let AntdCheckAll = null;
+function getAntdComponent() {
+  if (AntdCheckAll) return AntdCheckAll;
+  const h = window.React.createElement, antd = window.antd;
+
+  AntdCheckAll = function (props) {
+    const { inst, opciones, seleccion, columnas } = props;
+    const todos = opciones.length > 0 && seleccion.length === opciones.length;
+    const algunos = seleccion.length > 0 && !todos;
+
+    return h(antd.ConfigProvider, {
+        theme: {
+          token: {
+            colorPrimary: "#0077CC",
+            colorText: "#1F2937",
+            borderRadius: 6,
+            fontSize: 14,
+            fontFamily: "inherit",
+          },
+        },
+      },
+      h("div", { className: "acg-root-inner" },
+        h(antd.Checkbox, {
+          checked: todos,
+          indeterminate: algunos,
+          disabled: opciones.length === 0,
+          onChange: (e) => inst.change(e.target.checked ? opciones.slice() : []),
+        }, "Seleccionar todo"),
+        h(antd.Divider, { style: { margin: "8px 0" } }),
+        h("div", {
+          className: "acg-group",
+          style: { gridTemplateColumns: `repeat(${columnas}, minmax(0, 1fr))` },
+        }, opciones.map((o) => h(antd.Checkbox, {
+          key: o,
+          checked: seleccion.includes(o),
+          onChange: (e) => inst.change(e.target.checked
+            ? opciones.filter((x) => x === o || seleccion.includes(x))
+            : seleccion.filter((x) => x !== o)),
+        }, o)))
+      )
+    );
+  };
+  return AntdCheckAll;
+}
+
+function renderAntd(inst) {
+  const h = window.React.createElement;
+  inst.reactRoot.render(h(getAntdComponent(), {
+    inst,
+    opciones: inst.data.options || [],
+    seleccion: inst.current,
+    columnas: inst.data.columns || 1,
+  }));
+}
+
+function renderFallback(inst) {
+  let fb = inst.fallback;
+  if (!fb) {
+    inst.host.innerHTML =
+      '<label class="acg-fb-all"><input type="checkbox" /><span>Seleccionar todo</span></label>' +
+      '<hr class="acg-fb-sep" /><div class="acg-fb-list"></div>';
+    fb = inst.fallback = {
+      all: inst.host.querySelector(".acg-fb-all input"),
+      list: inst.host.querySelector(".acg-fb-list"),
+    };
+    fb.all.addEventListener("change", () => {
+      const opciones = inst.data.options || [];
+      inst.change(fb.all.checked ? opciones.slice() : []);
+    });
+  }
+  const opciones = inst.data.options || [];
+  const seleccion = inst.current;
+  const todos = opciones.length > 0 && seleccion.length === opciones.length;
+  fb.all.checked = todos;
+  fb.all.indeterminate = seleccion.length > 0 && !todos;
+  fb.all.disabled = opciones.length === 0;
+
+  fb.list.innerHTML = "";
+  fb.list.style.gridTemplateColumns = `repeat(${inst.data.columns || 1}, minmax(0, 1fr))`;
+  opciones.forEach((opcion) => {
+    const label = document.createElement("label");
+    label.className = "acg-fb-item";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = seleccion.includes(opcion);
+    cb.addEventListener("change", () => {
+      inst.change(opciones.filter((o) => (o === opcion ? cb.checked : inst.current.includes(o))));
+    });
+    const span = document.createElement("span");
+    span.textContent = opcion;
+    label.append(cb, span);
+    fb.list.appendChild(label);
+  });
+}
+
+export default function (component) {
+  const { data, parentElement, setTriggerValue } = component;
+  let inst = parentElement.__acgInstance;
+  if (!inst || inst.destroyed) {
+    inst = createInstance(parentElement);
+    parentElement.__acgInstance = inst;
+  }
+  inst.setTrigger = setTriggerValue;
+  inst.update(data);
+  return () => {
+    inst.destroy();
+    if (parentElement.__acgInstance === inst) delete parentElement.__acgInstance;
+  };
+}
+"""
 
 
-def _fijar_capas_kml(capas, valor):
-    for capa in capas:
-        st.session_state[f"kml_{capa}"] = valor
+@st.cache_resource(show_spinner=False)
+def _get_antd_check_all_component():
+    from streamlit.components.v2 import component as st_component_v2
+
+    # isolate_styles=False: los estilos CSS-in-JS de antd se inyectan en document.head.
+    return st_component_v2(
+        "antd_check_all_group",
+        css=_ANTD_CHECK_ALL_CSS,
+        js=_ANTD_CHECK_ALL_JS,
+        isolate_styles=False,
+    )
+
+
+def antd_check_all_group(*, opciones, seleccion, key, columnas=1, on_change=None):
+    """Checkboxes de Ant Design con "Seleccionar todo" (indeterminado incluido).
+
+    La selección confirmada queda en ``st.session_state[key]["commit"]["value"]``
+    junto con las ``options`` vigentes en ese momento.
+    """
+    componente = _get_antd_check_all_component()
+    return componente(
+        key=key,
+        data={"options": list(opciones), "value": list(seleccion), "columns": columnas},
+        on_commit_change=on_change if on_change is not None else (lambda: None),
+    )
+
+
+def _seleccion_grupo(key, opciones, por_defecto):
+    """Valores marcados según el último cambio; las opciones sin registro usan `por_defecto`."""
+    estado = st.session_state.get(key)
+    evento = estado.get("commit") if hasattr(estado, "get") else None
+    if not isinstance(evento, dict):
+        return [o for o in opciones if o in por_defecto]
+    marcados = set(evento.get("value") or [])
+    vistas = set(evento.get("options") or [])
+    return [o for o in opciones if (o in marcados if o in vistas else o in por_defecto)]
 
 
 def render_info_donut(vol_zona, clientes_zona, zona_sel):
@@ -4117,13 +4976,12 @@ if seccion == "Mapa":
 
         capas = [c for c in datos_kml.keys() if c.strip().lower() != "regionalización"]
 
-        # Capas activas por defecto (solo la primera vez que aparecen en sesión).
+        # Capas activas por defecto (solo para capas aún sin registro en el grupo).
         CAPAS_KML_DEFAULT = {"sistrangas", "sistemas de transporte"}
-        for capa in capas:
-            if f"kml_{capa}" not in st.session_state:
-                st.session_state[f"kml_{capa}"] = _normalizar_texto(capa) in CAPAS_KML_DEFAULT
-
-        capas_activas = sum(1 for c in capas if st.session_state.get(f"kml_{c}", False))
+        etiqueta_capa = {c: _label_checkbox_capa(c) for c in capas}
+        capas_por_defecto = {etiqueta_capa[c] for c in capas if _normalizar_texto(c) in CAPAS_KML_DEFAULT}
+        etiquetas_sel = set(_seleccion_grupo("capas_kml_grupo", list(etiqueta_capa.values()), capas_por_defecto))
+        capas_sel = [c for c in capas if etiqueta_capa[c] in etiquetas_sel]
 
         with col_head_actions:
             with st.popover("⚙️ Filtro(s)", help="Abrir panel maestro de mapa", use_container_width=True):
@@ -4136,22 +4994,15 @@ if seccion == "Mapa":
                 )
 
                 st.markdown("**Capas de infraestructura**")
-                st.caption(f"{capas_activas} de {len(capas)} activas")
-
-                col_accion_1, col_accion_2 = st.columns(2)
-                with col_accion_1:
-                    st.button("Seleccionar todo", key="kml_todo", use_container_width=True,
-                              on_click=_fijar_capas_kml, args=(capas, True))
-                with col_accion_2:
-                    st.button("Deseleccionar todo", key="kml_nada", use_container_width=True,
-                              on_click=_fijar_capas_kml, args=(capas, False))
+                st.caption(f"{len(capas_sel)} de {len(capas)} activas")
 
                 if capas:
-                    num_cols_capas = 4 if len(capas) >= 8 else (3 if len(capas) >= 5 else 2)
-                    cols_capas = st.columns(num_cols_capas)
-                    for i, capa in enumerate(capas):
-                        with cols_capas[i % num_cols_capas]:
-                            st.checkbox(_label_checkbox_capa(capa), key=f"kml_{capa}")
+                    antd_check_all_group(
+                        opciones=list(etiqueta_capa.values()),
+                        seleccion=[etiqueta_capa[c] for c in capas_sel],
+                        columnas=3,
+                        key="capas_kml_grupo",
+                    )
                 else:
                     st.caption("No hay capas de infraestructura disponibles en el KML.")
 
@@ -4231,7 +5082,7 @@ if seccion == "Mapa":
         # antes de llegar a esta sección, por lo que aquí solo se copia.
         df_geo_mapa = df_geo_seccion.copy()
 
-        carpetas_sel = [c for c in capas if st.session_state.get(f"kml_{c}", False)]
+        carpetas_sel = capas_sel
 
         if df_geo_pre_zona.empty:
             st.warning("No se pudieron obtener coordenadas de los códigos postales.")
@@ -4351,6 +5202,17 @@ elif seccion == "Reportes":
                 })
                 consumo_rep['promedio_gj_mensual'] = consumo_rep['consumo_gj_diario']
             base_reporte = base_reporte.merge(consumo_rep, on='id_instalacion', how='inner')
+
+    # Aplicar filtro de rango GJ según el tipo seleccionado (Suma o Promedio)
+    gj_filter_type_reporte = st.session_state.get("gj_filter_type", "Suma")
+    if not base_reporte.empty and gj_filter_type_reporte == "Suma" and 'consumo_gj_mensual' in base_reporte.columns:
+        consumo_col = pd.to_numeric(base_reporte['consumo_gj_mensual'], errors='coerce').fillna(0)
+        mask = (consumo_col >= min_gj_global) & (consumo_col <= max_gj_global_exact)
+        base_reporte = base_reporte[mask].copy()
+    elif not base_reporte.empty and gj_filter_type_reporte == "Promedio" and 'promedio_gj_mensual' in base_reporte.columns:
+        consumo_col = pd.to_numeric(base_reporte['promedio_gj_mensual'], errors='coerce').fillna(0)
+        mask = (consumo_col >= min_gj_global) & (consumo_col <= max_gj_global_exact)
+        base_reporte = base_reporte[mask].copy()
 
     if base_reporte.empty:
         st.info("No hay datos disponibles para generar un reporte.")
@@ -4548,12 +5410,12 @@ elif seccion == "Reportes":
             nombre_consumo_mensual = renombres_aplicados.get('consumo_gj_mensual')
             if nombre_consumo_mensual in df_reporte_final.columns:
                 column_config_reporte[nombre_consumo_mensual] = st.column_config.NumberColumn(
-                    nombre_consumo_mensual, format='%,.4f'
+                    nombre_consumo_mensual, format='%,.2f'
                 )
             nombre_promedio_mensual = renombres_aplicados.get('promedio_gj_mensual')
             if nombre_promedio_mensual in df_reporte_final.columns:
                 column_config_reporte[nombre_promedio_mensual] = st.column_config.NumberColumn(
-                    nombre_promedio_mensual, format='%,.4f'
+                    nombre_promedio_mensual, format='%,.2f'
                 )
             nombre_mes = renombres_aplicados.get('mes_consumo')
             if nombre_mes in df_reporte_final.columns:
@@ -4563,12 +5425,22 @@ elif seccion == "Reportes":
             nombre_pct_zona = renombres_aplicados.get('pct_cliente_zona')
             if nombre_pct_zona in df_reporte_final.columns:
                 column_config_reporte[nombre_pct_zona] = st.column_config.NumberColumn(
-                    nombre_pct_zona, format='%.4f%%'
+                    nombre_pct_zona, format='%.2f%'
+                )
+            nombre_spread_firme = renombres_aplicados.get('spread_firme')
+            if nombre_spread_firme in df_reporte_final.columns:
+                column_config_reporte[nombre_spread_firme] = st.column_config.NumberColumn(
+                    nombre_spread_firme, format='%.4f'
+                )
+            nombre_spread_volumetrico = renombres_aplicados.get('spread_volumetrico_o_interrumpible')
+            if nombre_spread_volumetrico in df_reporte_final.columns:
+                column_config_reporte[nombre_spread_volumetrico] = st.column_config.NumberColumn(
+                    nombre_spread_volumetrico, format='%.4f'
                 )
             nombre_spread_ponderado = renombres_aplicados.get('spread_ponderado')
             if nombre_spread_ponderado in df_reporte_final.columns:
                 column_config_reporte[nombre_spread_ponderado] = st.column_config.NumberColumn(
-                    nombre_spread_ponderado, format='$%,.4f'
+                    nombre_spread_ponderado, format='%,.4f'
                 )
             st.dataframe(
                 df_reporte_final,
@@ -5246,17 +6118,10 @@ elif seccion == "Dashboard":
                         )
                         if 'Segmentación' in base_tendencia.columns else []
                     )
-                    keys_segmentacion = {
-                        valor: f"segmentacion_tendencia_{col}_opcion_{valor}"
-                        for valor in opciones_segmentacion
-                    }
-                    for key_opcion in keys_segmentacion.values():
-                        if key_opcion not in st.session_state:
-                            st.session_state[key_opcion] = True
-                    segmentaciones_sel = [
-                        valor for valor, key_opcion in keys_segmentacion.items()
-                        if st.session_state[key_opcion]
-                    ]
+                    key_segmentacion = f"segmentacion_tendencia_{col}"
+                    segmentaciones_sel = _seleccion_grupo(
+                        key_segmentacion, opciones_segmentacion, set(opciones_segmentacion),
+                    )
 
                     mask_fecha = pd.Series(True, index=consumo_diario.index)
                     if col == 'Consumo_Total_Periodo_GJ':
@@ -5287,27 +6152,11 @@ elif seccion == "Dashboard":
                             f"Segmentación ({len(segmentaciones_sel)}/{len(opciones_segmentacion)})",
                             disabled=not opciones_segmentacion,
                         ):
-                            botones_segmentacion = st.columns(2)
-                            with botones_segmentacion[0]:
-                                st.button(
-                                    "Seleccionar todo",
-                                    key=f"segmentacion_todo_{col}",
-                                    disabled=not opciones_segmentacion,
-                                    use_container_width=True,
-                                    on_click=_fijar_checkboxes_segmentacion,
-                                    args=(list(keys_segmentacion.values()), True),
-                                )
-                            with botones_segmentacion[1]:
-                                st.button(
-                                    "Limpiar selección",
-                                    key=f"segmentacion_limpiar_{col}",
-                                    disabled=not opciones_segmentacion,
-                                    use_container_width=True,
-                                    on_click=_fijar_checkboxes_segmentacion,
-                                    args=(list(keys_segmentacion.values()), False),
-                                )
-                            for valor, key_opcion in keys_segmentacion.items():
-                                st.checkbox(valor, key=key_opcion)
+                            antd_check_all_group(
+                                opciones=opciones_segmentacion,
+                                seleccion=segmentaciones_sel,
+                                key=key_segmentacion,
+                            )
 
                     if not segmentaciones_sel:
                         st.info("Selecciona al menos una segmentación")
