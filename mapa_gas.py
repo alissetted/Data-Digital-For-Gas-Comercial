@@ -1942,24 +1942,32 @@ def cargar_datos():
         "SELECT * FROM denodo_consumos"
     )
     
-    # Filtrar archivados y convertir fecha
+    con = con.rename(columns=lambda c: str(c).strip())
+
+    # Filtrar archivados (si la columna viene en el CSV)
     if 'archivado' in con.columns:
         con = con[con['archivado'] != True]
-    if 'fecha' in con.columns:
-        con['fecha'] = pd.to_datetime(con['fecha'], errors='coerce')
-    
-    # Extraer componentes de fecha
-    con['anio'] = con['fecha'].dt.year
-    con['mes'] = con['fecha'].dt.month
-    con['dia'] = con['fecha'].dt.day
-    
-    # Agrupar por día
-    con = con.groupby(['id_instalacion', 'anio', 'mes', 'dia']).agg(
-        {'consumo_gj': 'sum'}
-    ).reset_index()
-    con.columns = ['id_instalacion', 'anio', 'mes', 'dia', 'CONSUMO']
 
-    con = con.rename(columns=lambda c: str(c).strip())
+    # El CSV puede venir con detalle por `fecha` o ya agregado con anio/mes/dia.
+    if not {'anio', 'mes', 'dia'}.issubset(con.columns):
+        if 'fecha' not in con.columns:
+            raise KeyError(
+                "El CSV de consumos debe tener 'fecha' o 'anio','mes','dia'. "
+                f"Columnas disponibles: {list(con.columns)}"
+            )
+        con['fecha'] = pd.to_datetime(con['fecha'], errors='coerce')
+        con = con.dropna(subset=['fecha'])
+        con['anio'] = con['fecha'].dt.year
+        con['mes'] = con['fecha'].dt.month
+        con['dia'] = con['fecha'].dt.day
+
+    # Agrupar por día (si ya viene agregado, es idempotente)
+    con = (
+        con.groupby(['id_instalacion', 'anio', 'mes', 'dia'], dropna=False)['consumo_gj']
+        .sum()
+        .reset_index()
+        .rename(columns={'consumo_gj': 'CONSUMO'})
+    )
     consumo_col = next((c for c in con.columns if c.upper() == 'CONSUMO'), None)
     if consumo_col is None:
         raise KeyError(f"No se encontró la columna de consumo. Columnas disponibles: {list(con.columns)}")
