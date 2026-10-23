@@ -1891,31 +1891,38 @@ def _dibujar_kml(parent, datos_kml, carpetas_visibles):
 def read_sql(query):
     """Lee datos desde archivos CSV locales en lugar de Databricks.
     Se utiliza para reemplazar las consultas a Denodo."""
+    base_dir = Path(__file__).resolve().parent
+
     # Mapeo de tablas Denodo a archivos CSV locales
     if 'denodo_registroclientes' in query:
-        file_path = Path('bv_hop_registroclientes_20261023_0911.csv')
-        if not file_path.exists():
-            raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
-        return pd.read_csv(file_path)
-    
+        file_path = base_dir / 'bv_hop_registroclientes_20261023_0911.csv'
     elif 'denodo_consumos' in query:
-        file_path = Path('bv_hop_consumos_20261023_0911.csv')
-        if not file_path.exists():
-            raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
-        df = pd.read_csv(file_path)
-        # Convertir la columna de fecha a datetime si existe
-        if 'fecha' in df.columns:
-            df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
-        return df
-    
+        file_path = base_dir / 'bv_hop_consumos_20261023_0911.csv'
     elif 'denodo_garantia' in query:
-        file_path = Path('bv_hop_garantia_20261023_0911.csv')
-        if not file_path.exists():
-            raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
-        return pd.read_csv(file_path)
-    
+        file_path = base_dir / 'bv_hop_garantia_20261023_0911.csv'
     else:
         raise ValueError(f"Consulta no soportada: {query}")
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
+
+    df = pd.read_csv(file_path)
+    df = df.rename(columns=lambda c: str(c).strip())
+
+    # Normaliza las claves de cruce a texto para que los merge entre CSVs
+    # no fallen por dtype (int64 en un archivo vs object en otro).
+    for key in ('id_instalacion', 'id_bp', 'cuenta_contrato'):
+        if key in df.columns:
+            df[key] = (
+                df[key].astype('string')
+                .str.strip()
+                .str.replace(r'\.0$', '', regex=True)
+            )
+
+    if 'fecha' in df.columns:
+        df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
+
+    return df
 
 
 # --- Carga de datos con caché ---
