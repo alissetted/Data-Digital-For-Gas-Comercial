@@ -1,10 +1,10 @@
 ﻿import streamlit as st
 import pandas as pd
 import numpy as np
-from databricks import sql
+# from databricks import sql  # DESHABILITADO - usando archivos CSV en lugar de Databricks
 from collections.abc import Mapping
 from pathlib import Path
-import tomllib
+# import tomllib  # DESHABILITADO - solo se usaba para cargar secretos de Databricks
 import pgeocode
 import folium
 import time
@@ -1852,50 +1852,70 @@ def _dibujar_kml(parent, datos_kml, carpetas_visibles):
         fg.add_to(parent)
 
 
-# --- Conexión al SQL Warehouse de Databricks ---
-def get_connection():
-    """Lee [databricks] del TOML local (Python 3.11+) o de st.secrets.
-
-    .streamlit/secretsdatabricks.toml, junto a este script, debe contener
-    server_hostname, http_path y access_token. Si el archivo no existe,
-    se usa [databricks] de los secretos de Streamlit para despliegues.
-    """
-    secrets_path = Path(__file__).resolve().parent / ".streamlit" / "secretsdatabricks.toml"
-    if secrets_path.is_file():
-        with secrets_path.open("rb") as secrets_file:
-            secrets = tomllib.load(secrets_file)
-    else:
-        secrets = st.secrets
-
-    if "databricks" not in secrets:
-        raise ValueError("Falta la sección [databricks] en la configuración de secretos.")
-    cfg = secrets["databricks"]
-    if not isinstance(cfg, Mapping):
-        raise ValueError("La sección [databricks] debe contener los campos de conexión.")
-    required_fields = ("server_hostname", "http_path", "access_token")
-    missing_fields = [
-        field for field in required_fields
-        if not isinstance(cfg.get(field), str) or not cfg[field].strip()
-    ]
-    if missing_fields:
-        raise ValueError(
-            "Configuración de Databricks incompleta. Revisa: " + ", ".join(missing_fields)
-        )
-    return sql.connect(
-        server_hostname=cfg["server_hostname"].strip(),
-        http_path=cfg["http_path"].strip(),
-        access_token=cfg["access_token"].strip(),
-    )
+# --- Conexión al SQL Warehouse de Databricks (DESHABILITADA - usando archivos CSV) ---
+# def get_connection():
+#     """Lee [databricks] del TOML local (Python 3.11+) o de st.secrets.
+# 
+#     .streamlit/secretsdatabricks.toml, junto a este script, debe contener
+#     server_hostname, http_path y access_token. Si el archivo no existe,
+#     se usa [databricks] de los secretos de Streamlit para despliegues.
+#     """
+#     secrets_path = Path(__file__).resolve().parent / ".streamlit" / "secretsdatabricks.toml"
+#     if secrets_path.is_file():
+#         with secrets_path.open("rb") as secrets_file:
+#             secrets = tomllib.load(secrets_file)
+#     else:
+#         secrets = st.secrets
+# 
+#     if "databricks" not in secrets:
+#         raise ValueError("Falta la sección [databricks] en la configuración de secretos.")
+#     cfg = secrets["databricks"]
+#     if not isinstance(cfg, Mapping):
+#         raise ValueError("La sección [databricks] debe contener los campos de conexión.")
+#     required_fields = ("server_hostname", "http_path", "access_token")
+#     missing_fields = [
+#         field for field in required_fields
+#         if not isinstance(cfg.get(field), str) or not cfg[field].strip()
+#     ]
+#     if missing_fields:
+#         raise ValueError(
+#             "Configuración de Databricks incompleta. Revisa: " + ", ".join(missing_fields)
+#         )
+#     return sql.connect(
+#         server_hostname=cfg["server_hostname"].strip(),
+#         http_path=cfg["http_path"].strip(),
+#         access_token=cfg["access_token"].strip(),
+#     )
 
 
 def read_sql(query):
-    with get_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(query)
-            columns = [column[0] for column in cursor.description]
-            return pd.DataFrame.from_records(
-                cursor.fetchall(), columns=columns, coerce_float=True
-            )
+    """Lee datos desde archivos CSV locales en lugar de Databricks.
+    Se utiliza para reemplazar las consultas a Denodo."""
+    # Mapeo de tablas Denodo a archivos CSV locales
+    if 'denodo_registroclientes' in query:
+        file_path = Path('bv_hop_registroclientes_20261023_0911.csv')
+        if not file_path.exists():
+            raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
+        return pd.read_csv(file_path)
+    
+    elif 'denodo_consumos' in query:
+        file_path = Path('bv_hop_consumos_20261023_0911.csv')
+        if not file_path.exists():
+            raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
+        df = pd.read_csv(file_path)
+        # Convertir la columna de fecha a datetime si existe
+        if 'fecha' in df.columns:
+            df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
+        return df
+    
+    elif 'denodo_garantia' in query:
+        file_path = Path('bv_hop_garantia_20261023_0911.csv')
+        if not file_path.exists():
+            raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
+        return pd.read_csv(file_path)
+    
+    else:
+        raise ValueError(f"Consulta no soportada: {query}")
 
 
 # --- Carga de datos con caché ---
@@ -1912,27 +1932,32 @@ def cargar_datos():
     diario (ver `construir_consumo_mensual`)."""
     cols = COLS_CLIENTES
 
+    # Cargar datos de clientes desde CSV
     r = read_sql(
-        f"SELECT {', '.join(cols + ['status'])} "
-        "FROM `engie_mex_apm`.`03-gold`.`denodo_registroclientes`"
+        "SELECT * FROM denodo_registroclientes"
     )
 
+    # Cargar datos de consumo desde CSV
     con = read_sql(
-        "SELECT "
-        "    id_instalacion, "
-        "    EXTRACT(YEAR FROM fecha) AS anio, "
-        "    EXTRACT(MONTH FROM fecha) AS mes, "
-        "    EXTRACT(DAY FROM fecha) AS dia, "
-        "    SUM(consumo_gj) AS CONSUMO "
-        "FROM `engie_mex_apm`.`03-gold`.`denodo_consumos` "
-        "WHERE fecha >= DATE '2026-01-01' "
-        "  AND archivado = FALSE "
-        "GROUP BY "
-        "    id_instalacion, "
-        "    EXTRACT(YEAR FROM fecha), "
-        "    EXTRACT(MONTH FROM fecha), "
-        "    EXTRACT(DAY FROM fecha) "
+        "SELECT * FROM denodo_consumos"
     )
+    
+    # Filtrar archivados y convertir fecha
+    if 'archivado' in con.columns:
+        con = con[con['archivado'] != True]
+    if 'fecha' in con.columns:
+        con['fecha'] = pd.to_datetime(con['fecha'], errors='coerce')
+    
+    # Extraer componentes de fecha
+    con['anio'] = con['fecha'].dt.year
+    con['mes'] = con['fecha'].dt.month
+    con['dia'] = con['fecha'].dt.day
+    
+    # Agrupar por día
+    con = con.groupby(['id_instalacion', 'anio', 'mes', 'dia']).agg(
+        {'consumo_gj': 'sum'}
+    ).reset_index()
+    con.columns = ['id_instalacion', 'anio', 'mes', 'dia', 'CONSUMO']
 
     con = con.rename(columns=lambda c: str(c).strip())
     consumo_col = next((c for c in con.columns if c.upper() == 'CONSUMO'), None)
@@ -2002,8 +2027,9 @@ def cargar_datos_garantias():
         reales: Vigente/Liberado/Vencido, más 'Sin status')."""
     cols = COLS_GARANTIA
 
+    # Cargar datos de garantías desde CSV
     df = read_sql(
-        f"SELECT {', '.join(cols)} FROM `engie_mex_apm`.`03-gold`.`denodo_garantia`"
+        "SELECT * FROM denodo_garantia"
     )
 
     df = df.dropna(subset=['razon_social'])
